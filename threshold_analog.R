@@ -45,28 +45,30 @@ scenarios <- c("ssp126","ssp245","ssp370","ssp585")
 years <- c(2020,2030,2040,2050,2060,2070,2080,2090,2100)
 
 #run analysis
-for(i in 1:9){
-  run_analog_analysis(
-    species_list = species_coord,
-    species_envelopes = species_envelope,
-    future_temp_list = list(tos_summer[[i]]), 
-    future_ph_list = list(ph_summer[[i]]),
-    time_periods = c(years[[i]]),
-    base_period = "1985",
-    mask = mask,
-    output_dir = output_directory,
-    scenario = scenarios[[4]],
-    model = "modelmean"
-  )
-  
-  notifyitsdone(
-    api_token = APItoken,
-    channel = "coralspecies",
-    event = "Analog Analysis Done",
-    description = paste0("904 species analogs calculated for year ",years[[i]]),
-    icon = "🔬"
-  )
-}
+#for(scenario in scenarios){
+  for(i in 1:9){
+    run_analog_analysis(
+      species_list = species_coord,
+      species_envelopes = species_envelope,
+      future_temp = tos_summer[[i]], 
+      future_ph = ph_summer[[9]],
+      time_period = years[[i]],
+      base_period = "1985",
+      mask = mask,
+      output_dir = output_directory,
+      scenario = scenarios[[4]],
+      model = "modelmean"
+    )
+    
+    notifyitsdone(
+      api_token = APItoken,
+      channel = "coralspecies",
+      event = "Analog Analysis Done",
+      description = paste0("904 species analogs calculated for year ",years[[i]]),
+      icon = "🔬"
+    )
+  }
+#}
 
 
 
