@@ -6,6 +6,8 @@ library(parallel)
 library(doParallel)
 
 source("config_dir.R")
+scenarios <- c("ssp126","ssp245","ssp370","ssp585") 
+years <- c(2020,2030,2040,2050,2060,2070,2080,2090,2100)
 
 #modified to accept climate envelopes rather than ranges
 analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, ncores = NULL) {
@@ -15,18 +17,24 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
   
   start_time <- Sys.time()
   
+  #increase memory allocation
+  terra::terraOptions(memfrac=0.8,progress=10)
+
   #adjust x to match climate data: -180,180 to 0,360
   sp_coords$x <- ifelse(sp_coords$x < 0, sp_coords$x + 360, sp_coords$x)
   
   #calculate pixel areas
   sp_coords <- as.data.table(sp_coords)
+  sp_envelope <- as.data.table(sp_envelope)
   coords_matrix <- sp_coords[, .(x, y)]
   area_raster <- cellSize(mask,unit='km')
   sp_coords$area <- terra::extract(area_raster, as.matrix(coords_matrix))$area
+  setkey(sp_coords, x, y)
+  setkey(sp_envelope, id_no)
 
   # Create unique points database from species coordinates
   cat("ANALOGCALC: Creating points database from species distribution...\n")
-  unique_points <- unique(sp_coords[, .(x, y, species_id)])
+  unique_points <- unique(sp_coords[, .(x, y)])
   setkey(unique_points, x, y)  
   unique_points[, point_id := .I]
   unique_species <- unique(sp_coords$species_id)
@@ -40,11 +48,10 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
   # Set number of cores and chunks
   if(is.null(ncores)) ncores <- max(1, parallel::detectCores() - 1)
   total_points <- nrow(unique_points)
-  chunk_size <- min(500, max(250, floor(total_points/ncores)))
-  n_chunks <- ceiling(total_points/chunk_size)
-  
+  points_per_chunk <- min(5000,max(250, floor(total_points/(4 * ncores))))
+  n_chunks <- ceiling(total_points/points_per_chunk)
+
   # Create wrapped version of mask that can be read in parallel
-  cat("Creating memory-mapped objects...\n")
   mask_wrapped <- wrap(mask)
   future_temp_wrapped <- wrap(future_temp)
   future_ph_wrapped <- wrap(future_ph)
@@ -85,6 +92,7 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
   process_chunk <- function(chunk_info) {
     chunk_start <- chunk_info$start
     chunk_end <- chunk_info$end
+    chunk_number <- chunk_info$chunk_num 
     
     # Initialize results list for SST and pH
     results_list <- list(
@@ -104,6 +112,10 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
     for(point_idx in chunk_start:chunk_end) {
       current_point <- unique_points[point_idx]
       
+      # Get species at this point efficiently
+      species_at_point <- unique(sp_coords[x == current_point$x & 
+                                             y == current_point$y, species_id])
+      
       # Get all species data for this point
       point_data <- sp_coords[x == current_point$x & y == current_point$y]
       
@@ -111,13 +123,17 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
       point_coords <- matrix(c(current_point$x, current_point$y), ncol=2)
       future_temp_val <- terra::extract(future_temp, point_coords)[[1]]
       future_ph_val <- terra::extract(future_ph, point_coords)[[1]]
+      
+      #calculate distance raster
+      temp_mask[] <- mask[]
+      origin_cell <- cellFromXY(temp_mask, point_coords)
+      temp_mask[origin_cell] <- 500
+      dist_raster <- gridDist(temp_mask, target=500, scale=1000)
 
       # Process each unique species at this point
-      unique_species_at_point <- unique(point_data$species_id)
-      
-      for(sp_id in unique_species_at_point) {
+      for(sp_id in species_at_point) {
         # Get envelope for current species
-        species_envelope <- sp_envelope[sp_envelope$id_no == sp_id,]
+        species_envelope <- sp_envelope[.(sp_id)]
         
         # Get data for current species at this point
         species_point_data <- point_data[point_data$species_id == sp_id,][1]
@@ -193,13 +209,6 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
                            future_raster[] >= current_vals$envelope_min)
           
           if(length(matches)>0) {
-            # Reset temp_mask
-            temp_mask[] <- mask[]
-            origin_cell <- cellFromXY(temp_mask,point_coords)
-            temp_mask[origin_cell] <- 500
-            
-            dist_raster <- gridDist(temp_mask, target=500, scale=1000)
-            
             # Calculate distances to matches
             matches_xy <- xyFromCell(future_raster, matches)
             distances <- extract(dist_raster, matches_xy)$landseamask
@@ -238,7 +247,7 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
       }
       }
       # Garbage collection every 100 points
-      if(point_idx %% 100 == 0) {
+      if(point_idx %% 250  == 0) {
         rm(dist_raster)
         gc(verbose = FALSE)
       }
@@ -249,13 +258,13 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
   
   # Process chunks
   chunks <- lapply(1:n_chunks, function(i) {
-    start_idx <- (i-1) * chunk_size + 1
-    end_idx <- min(i * chunk_size, total_points)
-    list(start = start_idx, end = end_idx)
+    start_idx <- (i-1) * points_per_chunk + 1
+    end_idx <- min(i * points_per_chunk, total_points)
+    list(start = start_idx, end = end_idx, chunk_num = i)
   })
   
   results <- parLapply(cl, chunks, process_chunk)
-
+  
   stopCluster(cl)
   
   # Combine results
@@ -264,6 +273,12 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
     sst = rbindlist(lapply(results, function(x) x[[1]]), fill=TRUE),
     ph = rbindlist(lapply(results, function(x) x[[2]]), fill=TRUE)
   )
+  
+  expected_rows <- nrow(sp_coords)
+  actual_rows_sst <- nrow(final_results$sst)
+  actual_rows_ph <- nrow(final_results$ph)
+  cat(sprintf("Expected %d rows, got %d sst rows and %d ph rows\n", 
+              expected_rows, actual_rows_sst,actual_rows_ph))
   
   end_time <- Sys.time()
   total_time <- as.numeric(end_time - start_time, units="secs")
@@ -276,8 +291,8 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
 
 
 
-# Modified analogdifference for envelopes
-analogdifference <- function(tempdf, phdf, mask, future_temp, future_ph, ncores = NULL) {
+# Modified analogdifference for envelopes, run per origin location
+analogdifference_origin <- function(tempdf, phdf, mask, future_temp, future_ph, ncores = NULL) {
   require(parallel)
   require(data.table)
   require(terra)
@@ -296,7 +311,6 @@ analogdifference <- function(tempdf, phdf, mask, future_temp, future_ph, ncores 
   setkey(future_val_dt, x, y)
 
   # Create database of unique coordinates
-  cat("Creating shared points database...\n")
   temp_coords <- tempdf[, .(px = px, py = py)]
   ph_coords <- phdf[, .(px = px, py = py)]
   all_coords <- unique(rbind(temp_coords, ph_coords))
@@ -311,7 +325,7 @@ analogdifference <- function(tempdf, phdf, mask, future_temp, future_ph, ncores 
   # Set number of cores and chunk size
   if(is.null(ncores)) ncores <- max(1, parallel::detectCores() - 1)
   total_points <- nrow(all_coords)
-  chunk_size <- min(1000, max(500, floor(total_points/ncores)))
+  chunk_size <- min(5000,max(250, floor(total_points/(4 * ncores))))
   n_chunks <- ceiling(total_points/chunk_size)
   
   # Create wrapped version of mask for parallel processing
@@ -327,7 +341,6 @@ analogdifference <- function(tempdf, phdf, mask, future_temp, future_ph, ncores 
   clusterEvalQ(cl, {
     library(terra)
     library(data.table)
-    setDTthreads(1)
     setkey(future_val_dt, x, y)
   })
   
@@ -599,6 +612,228 @@ analogdifference <- function(tempdf, phdf, mask, future_temp, future_ph, ncores 
   return(final_results)
 }
 
+#analogdiff calculation run per ph analog
+analogdifference <- function(tempdf, phdf, mask, future_temp, future_ph, ncores = NULL) {
+  require(parallel)
+  require(data.table)
+  require(terra)
+  
+  start_time <- Sys.time()
+  
+  # Convert inputs to data.table if they aren't already
+  if (!is.data.table(tempdf)) tempdf <- as.data.table(tempdf)
+  if (!is.data.table(phdf)) phdf <- as.data.table(phdf)
+  
+  # Pre-process future values into data.tables for faster lookup
+  cat("ANALOGDIFF: Pre-processing future values...\n")
+  future_rasters <- c(future_temp, future_ph)
+  future_val_dt <- as.data.table(terra::as.data.frame(future_rasters, xy = TRUE))
+  setnames(future_val_dt, c("x", "y", "future_temp", "future_ph"))
+  setkey(future_val_dt, x, y)
+  
+  # Create merged dataset of all possible combinations
+  cat("Creating merged dataset of all combinations...\n")
+  merged_dt <- merge(tempdf, phdf, 
+                     by = c("species_id", "px", "py"),
+                     suffixes = c("_temp", "_ph"),
+                     allow.cartesian = TRUE)
+  
+  # Split into cases with and without analogs
+  cases_with_analogs <- merged_dt[!is.na(fx_temp) & !is.na(fx_ph)]
+  cases_without_analogs <- merged_dt[is.na(fx_temp) | is.na(fx_ph)]
+  
+  # Get unique pH analog locations
+  unique_ph_analogs <- unique(cases_with_analogs[, .(fx_ph, fy_ph)])
+  cat(sprintf("Processing %d unique pH analog locations...\n", nrow(unique_ph_analogs)))
+  
+  # Set up parallel processing
+  if(is.null(ncores)) ncores <- max(1, parallel::detectCores() - 1)
+  chunk_size <- min(1000, max(100, floor(nrow(unique_ph_analogs)/ncores)))
+  n_chunks <- ceiling(nrow(unique_ph_analogs)/chunk_size)
+  
+  # Create wrapped version of mask for parallel processing
+  mask_wrapped <- wrap(mask)
+  
+  # Initialize cluster
+  cl <- makeCluster(ncores)
+  clusterExport(cl, c("cases_with_analogs", "mask_wrapped", "future_val_dt"), 
+                envir = environment())
+  clusterEvalQ(cl, {
+    library(terra)
+    library(data.table)
+    setkey(future_val_dt, x, y)
+  })
+  
+  # Helper function to create NA row
+  create_na_row <- function(data) {
+    data.table(
+      species_id = data$species_id,
+      px_temp = data$px,
+      py_temp = data$py,
+      pval_temp = data$pval_temp,
+      pvalf_temp = data$pvalf_temp,
+      pmin_temp = data$envelope_min_temp,
+      pmax_temp = data$envelope_max_temp,
+      fx_temp = data$fx_temp,
+      fy_temp = data$fy_temp,
+      fval_temp = data$fval_temp,
+      distance_temp = data$distance_temp,
+      directionr_temp = data$directionr_temp,
+      directiondeg_temp = data$directiondeg_temp,
+      px_ph = data$px,
+      py_ph = data$py,
+      pval_ph = data$pval_ph,
+      pvalf_ph = data$pvalf_ph,
+      pmin_ph = data$envelope_min_ph,
+      pmax_ph = data$envelope_max_ph,
+      fx_ph = data$fx_ph,
+      fy_ph = data$fy_ph,
+      fval_ph = data$fval_ph,
+      distance_ph = data$distance_ph,
+      directionr_ph = data$directionr_ph,
+      directiondeg_ph = data$directiondeg_ph,
+      area = data$area_temp,
+      analog_diff = NA_real_,
+      fanalogph_temp = NA_real_,
+      fanalogphdiff_temp = NA_real_,
+      fanalogtemp_ph = NA_real_,
+      fanalogtempdiff_ph = NA_real_
+    )
+  }
+  
+  # Helper function to create result row
+  create_result_row <- function(data, distance) {
+    data.table(
+      species_id = data$species_id,
+      px_temp = data$px,
+      py_temp = data$py,
+      pval_temp = data$pval_temp,
+      pvalf_temp = data$pvalf_temp,
+      pmin_temp = data$envelope_min_temp,
+      pmax_temp = data$envelope_max_temp,
+      fx_temp = data$fx_temp,
+      fy_temp = data$fy_temp,
+      fval_temp = data$fval_temp,
+      distance_temp = data$distance_temp,
+      directionr_temp = data$directionr_temp,
+      directiondeg_temp = data$directiondeg_temp,
+      px_ph = data$px,
+      py_ph = data$py,
+      pval_ph = data$pval_ph,
+      pvalf_ph = data$pvalf_ph,
+      pmin_ph = data$envelope_min_ph,
+      pmax_ph = data$envelope_max_ph,
+      fx_ph = data$fx_ph,
+      fy_ph = data$fy_ph,
+      fval_ph = data$fval_ph,
+      distance_ph = data$distance_ph,
+      directionr_ph = data$directionr_ph,
+      directiondeg_ph = data$directiondeg_ph,
+      area = data$area_temp,
+      analog_diff = data$analog_diff,
+      fanalogph_temp = data$fanalogph_temp,
+      fanalogphdiff_temp = data$fanalogphdiff_temp,
+      fanalogtemp_ph = data$fanalogtemp_ph,
+      fanalogtempdiff_ph = data$fanalogtempdiff_ph
+    )
+  }
+  
+  # Process chunk of pH analogs
+  process_chunk <- function(chunk_info) {
+    chunk_start <- chunk_info$start
+    chunk_end <- chunk_info$end
+    
+    # Initialize results
+    results <- data.table()
+    
+    # Unwrap mask once at the start
+    mask <- unwrap(mask_wrapped)
+    
+    # Process each pH analog in chunk
+    for(i in chunk_start:chunk_end) {
+      ph_analog <- unique_ph_analogs[i]
+      
+      # Get all cases that use this pH analog
+      ph_cases <- cases_with_analogs[fx_ph == ph_analog$fx_ph & 
+                                       fy_ph == ph_analog$fy_ph]
+      
+      # Skip if no cases use this analog
+      if(nrow(ph_cases) == 0) next
+      
+      # Create distance raster for this pH analog
+      temp_mask <- mask
+      ph_cell <- cellFromXY(temp_mask, 
+                            matrix(c(ph_analog$fx_ph, ph_analog$fy_ph), ncol=2))
+      temp_mask[ph_cell] <- 500
+      dist_raster <- gridDist(temp_mask, target=500, scale=1000)
+      
+      # Calculate distances for all temperature analogs
+      ph_cases[, analog_diff := extract(dist_raster, 
+                                        matrix(c(fx_temp, fy_temp), ncol=2))$landseamask]
+      
+      # Extract future values for each combination
+      ph_cases[, `:=`(
+        fanalogph_temp = future_val_dt[.(x=fx_temp, y=fy_temp), future_ph], #future ph at temp analog
+        fanalogtemp_ph = future_val_dt[.(x=fx_ph, y=fy_ph), future_temp], #future temp at ph analog
+        fanalogphdiff_temp = future_val_dt[.(x=fx_temp, y=fy_temp), future_ph] - pval_ph, #change in ph at temp analog
+        fanalogtempdiff_ph = future_val_dt[.(x=fx_ph, y=fy_ph), future_temp] - pval_temp #change in temp at ph analog
+      )]
+      
+      # Add to results
+      formatted_cases <- ph_cases[, create_result_row(.SD, analog_diff), by = 1:nrow(ph_cases)]
+      results <- rbindlist(list(results, formatted_cases))
+      
+      # Garbage collection
+      if(i %% 100 == 0) {
+        rm(dist_raster)
+        gc(verbose = FALSE)
+      }
+    }
+    
+    return(results)
+  }
+  
+  # Process chunks in parallel
+  chunks <- lapply(1:n_chunks, function(i) {
+    list(start = (i-1) * chunk_size + 1,
+         end = min(i * chunk_size, nrow(unique_ph_analogs)))
+  })
+  
+  # Get results for cases with analogs
+  results_with_analogs <- rbindlist(parLapply(cl, chunks, process_chunk))
+  stopCluster(cl)
+  
+  # Find minimum distance combinations
+  cat("\nFinding minimum distance combinations...\n")
+  best_combinations <- results_with_analogs[, .SD[which.min(analog_diff)], 
+                                            by = .(species_id, px_temp, py_temp)]
+  
+  # Process cases without analogs (both temp and pH)
+  cat("Processing cases without analogs...\n")
+  na_results <- cases_without_analogs[, create_na_row(.SD), by = .(species_id, px_temp = px, py_temp = py, px_ph=px, py_ph=py)]
+  
+  # Combine results
+  cat("\nCombining results...\n")
+  final_results <- rbindlist(list(best_combinations, na_results),fill=T)
+  
+  # Sort results
+  setorder(final_results, species_id, px_temp, py_temp)
+  
+  # Verify results
+  sp_coords <- unique(paste(tempdf$species_id, tempdf$px, tempdf$py))
+  expected_rows <- length(sp_coords)
+  actual_rows <- nrow(final_results)
+  cat(sprintf("Expected %d rows, got %d rows\n", 
+              expected_rows, actual_rows))
+  
+  total_time <- as.numeric(Sys.time() - start_time, units="secs")
+  cat(sprintf("\nProcessing completed in %0.1f seconds (%0.1f minutes)\n", 
+              total_time, total_time/60))
+  
+  return(final_results)
+}
+
+
 
 
 # Modified dualanalog for envelopes
@@ -610,7 +845,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
   cat("DUALCALC: Initializing data structures...\n")
   start_time <- Sys.time()
   
-  terra::terraOptions(memfrac=0.5)
+  terra::terraOptions(memfrac=0.8,progress=10)
   
   # Validate inputs
   if (!all(sapply(list(future_temp, future_ph), 
@@ -619,12 +854,8 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
   }
   
   # Convert sp_coords to data.table if it isn't already
-  if (!is.data.table(sp_coords)) {
-    sp_coords <- as.data.table(sp_coords)
-  }
-  if (!is.data.table(sp_envelope)) {
-    sp_envelope <- as.data.table(sp_envelope)
-  }
+  sp_coords <- as.data.table(sp_coords)
+  sp_envelope <- as.data.table(sp_envelope)
   
   # Adjust x coordinates if needed (-180,180 to 0,360)
   sp_coords[, x := ifelse(x < 0, x + 360, x)]
@@ -663,8 +894,11 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
   # Set keys for faster operations
   setkey(all_data, x, y)
   
-  # Create all_coords from all_data
-  all_coords <- all_data[, .(x, y)]
+  # find unique points & species
+  unique_points <- unique(sp_coords[, .(x, y)])
+  setkey(unique_points, x, y)  
+  unique_points[, point_id := .I]
+  unique_species <- unique(sp_coords$species_id)
   
   # Set number of cores
   if(is.null(ncores)) ncores <- max(1, parallel::detectCores() - 1)
@@ -676,7 +910,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
   ph_wrapped <- wrap(future_ph)
   
   # Calculate optimal chunk size
-  total_points <- nrow(all_coords)
+  total_points <- nrow(unique_points)
   chunk_size <- min(500, max(250, floor(total_points/20)))
   n_chunks <- ceiling(total_points/chunk_size)
   
@@ -685,7 +919,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
   
   # Initialize cluster
   cl <- makeCluster(ncores)
-  clusterExport(cl, c("all_coords", "all_data", "mask_wrapped","tos_wrapped","ph_wrapped"), 
+  clusterExport(cl, c("unique_points", "all_data", "mask_wrapped","tos_wrapped","ph_wrapped"), 
                 envir = environment())
   clusterEvalQ(cl, {
     library(terra)
@@ -751,38 +985,49 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
                 
     # Process each point in the chunk
     for(point_idx in chunk_start:chunk_end) {
+      current_point <- unique_points[point_idx]
+      
+      # Get species at this point 
+      species_at_point <- unique(all_data[x == current_point$x & 
+                                             y == current_point$y, species_id])
+      
       # Get data for current location
-      current_data <- all_data[point_idx]
+      current_data <- all_data[x == current_point$x & y == current_point$y]
       
       if(nrow(current_data) == 0) {
         results <- rbind(results, create_result_row(current_data))
         next
       }
       
-      # Check if current location is still within both envelopes
-      temp_in_envelope <- !is.na(current_data$sst_future) && 
-        current_data$sst_future >= current_data$temp_min && 
-        current_data$sst_future <= current_data$temp_max
+      #process each unique species at this point
+      for(sp_id in species_at_point){
+        #get data for current species
+        species_data <- current_data[current_data$species_id == sp_id,][1]
+        
+        # Check if current location is still within both envelopes
+      temp_in_envelope <- !is.na(species_data$sst_future) && 
+        species_data$sst_future >= species_data$temp_min && 
+        species_data$sst_future <= species_data$temp_max
       
-      ph_in_envelope <- !is.na(current_data$ph_future) && 
-        current_data$ph_future >= current_data$ph_min && 
-        current_data$ph_future <= current_data$ph_max
+      ph_in_envelope <- !is.na(species_data$ph_future) && 
+        species_data$ph_future >= species_data$ph_min && 
+        species_data$ph_future <= species_data$ph_max
       
       # If both conditions are met at origin, create result with distance 0
       if(temp_in_envelope && ph_in_envelope) {
         results <- rbind(results, create_result_row(
-          data = current_data,
-          future_xy = c(current_data$x, current_data$y),
-          future_vals = c(current_data$sst_future, current_data$ph_future),
+          data = species_data,
+          future_xy = c(species_data$x, species_data$y),
+          future_vals = c(species_data$sst_future, species_data$ph_future),
           distance = 0,
           direction = 0
         ))
         next
       }
       
-      # Create raster masks for valid regions
-      temp_valid <- future_temp <= current_data$temp_max & future_temp >= current_data$temp_min
-      ph_valid <- future_ph <= current_data$ph_max & future_ph >= current_data$ph_min
+      # if origin is not analog, create raster masks for valid regions
+      temp_valid <- future_temp <= species_data$temp_max & future_temp >= species_data$temp_min
+      ph_valid <- future_ph <= species_data$ph_max & future_ph >= species_data$ph_min
       
       # Combine conditions
       valid_cells <- which(!is.na(temp_valid[]) & temp_valid[] & 
@@ -790,7 +1035,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
                              !is.na(mask[]))
       
       if(length(valid_cells) == 0) {
-        results <- rbind(results, create_result_row(current_data))
+        results <- rbind(results, create_result_row(species_data))
         next
       }
       
@@ -800,7 +1045,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
       # Calculate distances for valid points
       temp_mask <- mask
       origin_cell <- cellFromXY(temp_mask, 
-                                matrix(c(current_data$x, current_data$y), ncol=2))
+                                matrix(c(species_data$x, species_data$y), ncol=2))
       temp_mask[origin_cell] <- 500
       
       dist_raster <- gridDist(temp_mask, target=500, scale=1000)
@@ -818,10 +1063,10 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
         
         # Calculate direction
         direction <- atan2(
-          closest_match$y - current_data$y,
-          closest_match$x - current_data$x
+          closest_match$y - species_data$y,
+          closest_match$x - species_data$x
         )
-
+        
         closest_temp <- terra::extract(future_temp, 
                                        matrix(c(closest_match$x, closest_match$y), ncol=2))[[1]]
         closest_ph <- terra::extract(future_ph, 
@@ -829,15 +1074,21 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
         
         # Add result
         results <- rbind(results, create_result_row(
-          data = current_data,
+          data = species_data,
           future_xy = c(closest_match$x, closest_match$y),
           future_vals = c(closest_temp, closest_ph),
           distance = closest_match$distance,
           direction = direction
         ))
       } else {
-        results <- rbind(results, create_result_row(current_data))
+        results <- rbind(results, create_result_row(species_data))
       }
+      
+      
+      }
+      
+      
+      
       
       # Garbage collection every 100 points
       if(point_idx %% 100 == 0) {
@@ -867,7 +1118,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
   final_results <- rbindlist(results)
   
   # Verify results
-  expected_rows <- nrow(all_coords)
+  expected_rows <- nrow(all_data)
   actual_rows <- nrow(final_results)
   cat(sprintf("Expected %d rows, got %d rows\n", 
               expected_rows, actual_rows))
@@ -881,181 +1132,8 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
 
 
 
-# modified to run per species with envelopes
-run_analog_analysis <- function(species_list, species_envelopes, 
-                                future_temp, future_ph, 
-                                time_period, base_period="hist", mask, output_dir,
-                                scenario, model, ncores=NULL,
-                                batch_size=100) {
-  require(terra)
-  require(data.table)
-  
-  # Validate base_period
-  if(!base_period %in% c("hist", "1985")) {
-    stop("base_period must be either 'hist' or '1985'")
-  }
-  
-  # Create temporary directory to store intermediate progress
-  temp_dir <- file.path(output_dir, "temp_batches")
-  if(!dir.exists(temp_dir)) {
-    dir.create(temp_dir)
-  }
-  
-  # Convert inputs to data.tables if not already
-  species_dt <- as.data.table(species_list)
-  envelopes_dt <- as.data.table(species_envelopes)
-  
-  # Get unique coordinate combinations
-  unique_coords <- unique(species_dt[, .(x, y)])
-  n_coords <- nrow(unique_coords)
-  
-  # Calculate number of batches based on unique coordinates
-  batch_size <- min(batch_size, n_coords)
-  n_batches <- ceiling(n_coords / batch_size)
-  
-  cat(sprintf("Processing %d unique coordinates in %d batches of %d coordinates each\n", 
-              n_coords, n_batches, batch_size))
-  
-    # Initialize lists to store results for this time period
-  batch_results <- list(
-    dual = vector("list", n_batches),
-    tos = vector("list", n_batches),
-    ph = vector("list", n_batches),
-    diff = vector("list", n_batches)
-  )
-    
-    # Process species in batches
-    for(b in 1:n_batches) {
-      batch_start <- (b-1) * batch_size + 1
-      batch_end <- min(b * batch_size, n_coords)
-      
-      # Get coordinates for this batch
-      batch_coords_subset <- unique_coords[batch_start:batch_end]
-      
-      # Get all species data for these coordinates
-      batch_coords <- species_dt[x %in% batch_coords_subset$x & 
-                                   y %in% batch_coords_subset$y]
-      
-      # Get envelopes for species in this coordinate batch
-      batch_envelopes <- envelopes_dt[id_no %in% unique(batch_coords$species_id)]
-      
-      cat(sprintf("\nProcessing batch %d/%d (coordinates %d to %d, %d species)\n", 
-                  b, n_batches, batch_start, batch_end, 
-                  length(unique(batch_coords$species_id))))
 
-      # Create batch-specific temp filenames
-      batch_files <- list(
-        dual = file.path(temp_dir, sprintf("batch_%d_dualanalog_%s_%s_%s-%s.csv",
-                                           b, model, scenario, base_period, time_period)),
-        tos = file.path(temp_dir, sprintf("batch_%d_analog_tos_%s_%s_%s-%s.csv",
-                                          b, model, scenario, base_period, time_period)),
-        ph = file.path(temp_dir, sprintf("batch_%d_analog_ph_%s_%s_%s-%s.csv",
-                                         b, model, scenario, base_period, time_period)),
-        diff = file.path(temp_dir, sprintf("batch_%d_analogdiff_%s_%s_%s-%s.csv",
-                                           b, model, scenario, base_period, time_period))
-      )
-      
-      cat(sprintf("\nProcessing batch %d/%d (coordinates %d to %d)\n", 
-                  b, n_batches, batch_start, batch_end))
-      
-      # Run analyses for this batch
-      # run dual analog
-      dual_results <- dualanalog(
-        sp_coords = batch_coords,
-        sp_envelope = batch_envelopes,
-        future_temp = future_temp,
-        future_ph = future_ph,
-        mask = mask,
-        ncores = ncores
-      )
-      
-      # Save batch dual results 
-      fwrite(dual_results, batch_files$dual, row.names = FALSE)
-      batch_results$dual[[b]] <- dual_results
-      
-      # run analog calc which returns a list of sst and ph results
-      tosph_results <- analogcalc(
-        sp_coords = batch_coords,
-        future_temp = future_temp,
-        future_ph = future_ph,
-        sp_envelope = batch_envelopes,
-        mask = mask,
-        ncores = ncores
-      )
-      
-      # Save batch tosph results 
-      fwrite(tosph_results$sst, batch_files$tos, row.names = FALSE)
-      fwrite(tosph_results$ph, batch_files$ph, row.names = FALSE)
-      batch_results$tos[[b]] <- tosph_results$sst
-      batch_results$ph[[b]] <- tosph_results$ph
-      
-      # run analog difference
-      diff_results <- analogdifference(
-        tempdf = tosph_results$sst,
-        phdf = tosph_results$ph,
-        mask = mask,
-        future_temp = future_temp,
-        future_ph = future_ph,
-        ncores = ncores
-      )
-      
-      # Save batch diff results 
-      fwrite(diff_results, batch_files$diff, row.names = FALSE)
-      batch_results$diff[[b]] <- diff_results
-      
-      # Garbage collection
-      gc()
-    }
-    
-    # Combine all batches for this time period
-    cat("\nCombining batch results...\n")
-    combined_results <- list(
-      dual = rbindlist(batch_results$dual),
-      tos = rbindlist(batch_results$tos),
-      ph = rbindlist(batch_results$ph),
-      diff = rbindlist(batch_results$diff)
-    )
-    
-    # Save combined results for this time period
-    cat("Saving results...\n")
-    output_files <- list(
-      dual = file.path(output_dir, 
-                       sprintf("dualanalog_%s_%s_%s-%s.csv",
-                               model, scenario, base_period, time_period)),
-      tos = file.path(output_dir,
-                      sprintf("analog_tos_%s_%s_%s-%s.csv",
-                              model, scenario, base_period, time_period)),
-      ph = file.path(output_dir,
-                     sprintf("analog_ph_%s_%s_%s-%s.csv",
-                             model, scenario, base_period, time_period)),
-      diff = file.path(output_dir,
-                       sprintf("analogdiff_%s_%s_%s-%s.csv",
-                               model, scenario, base_period, time_period))
-    )
-    
-    # Save all results
-    for(type in names(combined_results)) {
-      fwrite(combined_results[[type]], 
-             output_files[[type]], 
-             row.names = FALSE)
-      
-      # Print number of rows saved
-      cat(sprintf("Saved %d rows to %s\n", 
-                  nrow(combined_results[[type]]),
-                  basename(output_files[[type]])))
-    }
-    
-    # Clean up this time period's results
-    rm(combined_results, period_results)
-    gc()
-    
-    # Clean up temp batch files after successful completion of time period
-    unlink(list.files(temp_dir, full.names = TRUE))
-  
-}
-
-
-#NO BATCHES
+#
 run_analog_analysis <- function(species_list, species_envelopes, 
                                 future_temp, future_ph, 
                                 time_period, base_period="hist", mask, output_dir,
@@ -1090,47 +1168,82 @@ run_analog_analysis <- function(species_list, species_envelopes,
                              model, scenario, base_period, time_period))
   )
   
-  # Run dual analog analysis
-  cat("Running dual analog analysis...\n")
-  dual_results <- dualanalog(
-    sp_coords = species_dt,
-    sp_envelope = envelopes_dt,
-    future_temp = future_temp,
-    future_ph = future_ph,
-    mask = mask
-  )
+  # Check if output files exist
+  all_files_exist <- all(file.exists(c(output_files$dual, output_files$tos, output_files$ph, output_files$diff)))
   
-  fwrite(dual_results, output_files$dual, row.names = FALSE)
-  cat(sprintf("Saved %d rows to %s\n", nrow(dual_results), basename(output_files$dual)))
+  if(all_files_exist) {
+    cat(sprintf("\nAll output files already exist for %s to %d. Skipping analysis...\n", 
+                time_period, end_year))
+    return(invisible(NULL))
+  }
+  
+  # Run dual analog analysis
+  if(!file.exists(output_files$dual)) {
+    cat(sprintf("\nRunning dual analog analysis for %s to %d...\n", base_period, time_period))
+    dual_results <- dualanalog(
+      sp_coords = species_dt,
+      sp_envelope = envelopes_dt,
+      future_temp = future_temp,
+      future_ph = future_ph,
+      mask = mask
+    )
+    cat("\nSaving dual analog results...\n")
+    fwrite(dual_results, output_files$dual)
+  } else {
+    cat("\nDual analog results already exist. Skipping...\n")
+  }
   
   # Run analog calc which returns a list of sst and ph results
-  cat("Running analog calculations...\n")
-  tosph_results <- analogcalc(
-    sp_coords = species_dt,
-    future_temp = future_temp,
-    future_ph = future_ph,
-    sp_envelope = envelopes_dt,
-    mask = mask
+  tosph_needed <- !file.exists(output_files$tos) || !file.exists(output_files$ph)
+  if(tosph_needed) {
+    cat(sprintf("\nRunning temperature and pH analog analysis for %s to %d...\n", 
+                base_period, time_period))
+    tosph_results <- analogcalc(
+      sp_coords = species_dt,
+      future_temp = future_temp,
+      future_ph = future_ph,
+      sp_envelope = envelopes_dt,
+      mask = mask
     )
   
-  fwrite(tosph_results$sst, output_files$tos, row.names = FALSE)
-  fwrite(tosph_results$ph, output_files$ph, row.names = FALSE)
-  cat(sprintf("Saved %d rows to %s\n", nrow(tosph_results$sst), basename(output_files$tos)))
-  cat(sprintf("Saved %d rows to %s\n", nrow(tosph_results$ph), basename(output_files$ph)))
+    # Save individual results if they don't exist
+    if(!file.exists(output_files$tos)) {
+      cat("\nSaving temperature analog results...\n")
+      fwrite(tosph_results$sst, output_files$tos, row.names = FALSE)
+    }
+    if(!file.exists(output_files$ph)) {
+      cat("\nSaving pH analog results...\n")
+      fwrite(tosph_results$ph, output_files$ph, row.names = FALSE)
+    }
+  } else {
+    cat("\nTemperature and pH analog results already exist. Skipping...\n")
+  }
   
   # Run analog difference
-  cat("Running analog difference calculations...\n")
-  diff_results <- analogdifference(
-    tempdf = tosph_results$sst,
-    phdf = tosph_results$ph,
-    mask = mask,
-    future_temp = future_temp,
-    future_ph = future_ph,
-    ncores = ncores
-  )
-  
-  fwrite(diff_results, output_files$diff, row.names = FALSE)
-  cat(sprintf("Saved %d rows to %s\n", nrow(diff_results), basename(output_files$diff)))
+  if(!file.exists(output_files$diff)) {
+    cat("\nRunning analog difference analysis...\n")
+    # If we didn't run tosph analysis, we need to read the files
+    if(!tosph_needed) {
+      tosph_results <- list(
+        sst = fread(output_files$tos),
+        ph = fread(output_files$ph)
+      )
+    }
+    
+    diff_results <- analogdifference(
+      tempdf = tosph_results$sst,
+      phdf = tosph_results$ph,
+      mask = mask,
+      future_temp = future_temp,
+      future_ph = future_ph,
+      ncores = ncores
+    )
+    
+    cat("\nSaving analog difference results...\n")
+    fwrite(diff_results, output_files$diff, row.names = FALSE)
+  } else {
+    cat("\nAnalog difference results already exist. Skipping...\n")
+  }
   
   # Clean up
   gc()

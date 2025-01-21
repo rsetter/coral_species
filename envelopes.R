@@ -218,6 +218,65 @@ species_envelope <- read.csv(periods[['8292']]$outfile)
 
 
 
+#calculate fractional coverage for each pixel
+cores <- detectCores() - 1
+cl <- makeCluster(cores)
+registerDoParallel(cl)
+clusterEvalQ(cl, {
+  library(terra)
+  library(data.table)
+  TRUE
+})
+
+# Set chunk size
+chunk_size <- 50
+n_species <- 903
+
+for(i in seq(1, n_species, chunk_size)) {
+  end_i <- min(i + chunk_size - 1, n_species)
+  cat("Processing species", i, "to", end_i, "\n")
+  
+  chunk_results <- foreach(j = i:end_i, 
+                           .packages = c("terra")) %dopar% {
+                             
+                             # Open species polygon
+                             species_query <- sprintf("SELECT * FROM coral_all WHERE fid = %d", j)
+                             species_poly <- vect(paste0(iucn_sp_folder, "coral_all.gpkg"), query=species_query)
+                             species_id <- species_poly$id_no
+                             
+                             # Create template raster covering species extent
+                             template_rast <- rast(periods[['8292']]$sst_files[1])  # Using first file for resolution
+                             species_rast <- rasterize(species_poly, template_rast, cover=TRUE)
+                             
+                             # Extract cells with coverage values
+                             cells <- as.data.frame(species_rast, xy=TRUE)
+                             
+                             # Remove NA values and rename columns
+                             pixel_coverage <- na.omit(cells)
+                             names(pixel_coverage) <- c("x", "y", "coverage_fraction")
+                             
+                             # Add species ID
+                             pixel_coverage$species_id <- species_id
+                             
+                             pixel_coverage
+                           }
+  #combine into data.table, save
+  pixelcover <- rbindlist(chunk_results)
+  fwrite(pixelcover,
+         file= file.path(output_directory, 'species_pixelcover.csv'),
+         append = i != 1,
+         col.names = i == 1)
+  
+  #clean
+  rm(chunk_results,pixelcover)
+  gc()
+}
+
+
+
+
+
+
 
 library(RCurl) #notification system - phone notification when code finished running
 
