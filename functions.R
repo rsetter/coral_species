@@ -9,6 +9,9 @@ source("config_dir.R")
 scenarios <- c("ssp126","ssp245","ssp370","ssp585") 
 years <- c(2020,2030,2040,2050,2060,2070,2080,2090,2100)
 
+
+#analog functions. adapted from climate vectors project
+
 #modified to accept climate envelopes rather than ranges
 analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, ncores = NULL) {
   require(parallel)
@@ -291,7 +294,7 @@ analogcalc <- function(sp_coords, future_temp, future_ph, sp_envelope, mask, nco
 
 
 
-# Modified analogdifference for envelopes, run per origin location
+# Modified analogdifference for envelopes, run per origin location (is slower than analogdifference, but same calculation)
 analogdifference_origin <- function(tempdf, phdf, mask, future_temp, future_ph, ncores = NULL) {
   require(parallel)
   require(data.table)
@@ -1133,7 +1136,7 @@ dualanalog <- function(sp_coords, sp_envelope, future_temp, future_ph, mask, nco
 
 
 
-#
+# runs analogcalc, analogdifference, dualanalog calculations
 run_analog_analysis <- function(species_list, species_envelopes, 
                                 future_temp, future_ph, 
                                 time_period, base_period="hist", mask, output_dir,
@@ -1283,5 +1286,153 @@ notifyitsdone <- function(api_token,project = "rcode",channel = "rproject",event
 
 
 
+
+# threshold functions
+
+#function to change mon timesteps to summer-only months(summerN, summerS) then to annual summer mean 
+#summerN = July-September (N Hemisphere), summerS = January-March (S Hemisphere)
+#note: requires monthly input, no yr input. modelmedian input
+#variable = 'tos' or 'ph'
+#scenario = "hist","ssp126","ssp245","ssp370","ssp585"
+#model = 'modelmean' or 'modelmedian
+summerannual <- function(variable, scenario, model) {
+  files <- list.files(paste0(cmip_folder,variable), 
+                      pattern = paste0(variable,".+Omon.",model,".+",scenario),
+                      full.names = T)
+  
+  timestepin <- substring(sub(".*_O","",files[1]),1,2)
+  raster <- rast(files)
+  
+  fileoutN <- paste(sub("_Omon","_OyrsummerN",files[1]))
+  fileoutS <- paste(sub("_Omon","_OyrsummerS",files[1]))
+  
+  # for ssp126,ssp245,ssp370,ssp585
+  # 1032 months total, 86 years
+  years <- 86
+  
+  # northern hemisphere summer (July-September)
+  julyaugsept <- c(7,8,9)
+  julyaugsepts <- numeric(0)
+  for (i in 0:(years - 1)) {
+    julyaugsepts <- c(julyaugsepts, julyaugsept + i * 12)
+  }
+  summerN <- subset(raster, julyaugsepts)
+  
+  # southern hemisphere summer (January-March)
+  janfebmarch <- c(1,2,3)
+  janfebmarchs <- numeric(0)
+  for (i in 0:(years - 1)) {
+    janfebmarchs <- c(janfebmarchs, janfebmarch + i * 12)
+  }
+  summerS <- subset(raster, janfebmarchs)
+  
+  yearIndex <- rep(1:86, each=3)  # 3 months per summer, for 86 years
+
+  # Calculate annual summer means
+  annualN <- tapp(summerN, index=yearIndex, fun=mean, na.rm=T, cores=18, filename=fileoutN)
+  
+  annualS <- tapp(summerS, index=yearIndex, fun=mean, na.rm=T, cores=18, filename=fileoutS)
+  
+  annualNS <- list(annualN, annualS)
+  
+  return(annualNS)
+}
+
+
+
+# dhw functions
+
+# calculate monthly DHW 
+calculate_dhw <- function(sst_file, mmm){
+  sst <- rast(sst_file)
+  anomalies <- sst - mmm
+  anomalies[anomalies < 1] <- 0
+  
+  n_layers <- nlyr(anomalies)
+  dhw_list <- vector("list", n_layers)
+  
+  for(i in 1:n_layers) {
+    # get 3 month window (equivalent to 12 weeks)
+    window_size <- min(3, i)
+    start_idx <- max(1, i - window_size + 1)
+    window <- anomalies[[start_idx:i]]
+    
+    # multiply by 4.34 to convert monthly anomalies to DHW
+    dhw_list[[i]] <- sum(window, na.rm=TRUE) * 4.34
+  }
+  
+  dhw_stack <- rast(dhw_list)
+  return(dhw_stack)
+}
+
+# Calculate annual maximum DHW (capturing summer bleaching events)
+calculate_annual_max_dhw <- function(dhw_stack){
+  n_years <- nlyr(dhw_stack) %/% 12
+  annual_max_dhw <- rast()
+  
+  for(year in 1:n_years) {
+    year_start <- (year-1)*12 + 1
+    year_end <- year*12
+    year_data <- dhw_stack[[year_start:year_end]]
+    max_dhw <- max(year_data, na.rm=T)
+    annual_max_dhw <- c(annual_max_dhw, max_dhw)
+  }
+  
+  return(annual_max_dhw)
+}
+
+# year annual severe bleaching begins 
+# (after this year, there are severe bleaching events of DHW >8 every subsequent year)
+year_ASB <- function(annual_max_dhw){
+  n_years <- nlyr(annual_max_dhw)
+  years <- 2015:2100
+  
+  asb_yr <- app(annual_max_dhw, function(x) {
+    if(all(is.na(x))) return(NA)
+    
+    for(i in 1:length(x)) {
+      if(all(x[i:length(x)] > 8, na.rm=TRUE)) {
+        return(years[i])
+      }
+    }
+    return(NA)
+  })
+  
+  return(asb_yr)
+}
+
+# length of bleaching events per year
+# (how many months per year are potential bleaching events, where DHW > 8)
+asb_duration_annual <- function(dhw_stack){
+  # mask for severe bleaching events
+  severe_bleaching <- dhw_stack > 8
+  
+  n_years <- 86
+  year_index <- rep(1:n_years, each=12)
+  
+  asb_duration <- tapp(severe_bleaching, 
+                       index = year_index, 
+                       fun = sum, 
+                       na.rm = TRUE)
+  
+  return(asb_duration)
+}
+
+
+# Calculate decadal mean 
+# use on output of calculate_annual_max_dhw() to find decadal max DHW 
+# use on output of asb_duration_annual() to find decadal asb duration
+calc_decadal_from_annual <- function(annual_dhw_raster){
+  
+  decade_index <- rep(1:9, each=10)[1:nlyr(annual_dhw_raster)]
+  
+  # Calculate decadal means
+  decadal_means <- tapp(annual_dhw_raster, 
+                        index=decade_index,
+                        fun=mean,
+                        na.rm=TRUE)
+  
+  return(decadal_means)
+}
 
 
