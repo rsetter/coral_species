@@ -9,6 +9,8 @@ library(ggridges)
 
 source("functions.R")
 
+scenarios <- c("ssp126","ssp245","ssp370","ssp585")
+
 #open envelope exceedance data
 exceedsp126 <- fread(paste0(output_directory, "species_exceedance_summary_", scenarios[[1]], ".csv"))
 exceedsp245 <- fread(paste0(output_directory, "species_exceedance_summary_", scenarios[[2]], ".csv"))
@@ -47,52 +49,57 @@ dhwsp585 <- merge(dhwsp585,species_envelope,by.x="species_id",by.y="id_no",all.x
 
 exceed585$pct_exceed_temp_area <- exceed585$temp_exceed_area / exceed585$total_area
 exceed585$pct_exceed_ph_area <- exceed585$ph_exceed_area / exceed585$total_area
-exceed585$pct_exceed1_ph_area <- exceed585$ph_exceed1_area / exceed585$total_area
-exceed585$pct_exceed2_ph_area <- exceed585$ph_exceed2_area / exceed585$total_area
-exceed585$pct_exceed3_ph_area <- exceed585$ph_exceed3_area / exceed585$total_area
 exceed585$pct_exceed_dual_area <- exceed585$dual_exceed_area / exceed585$total_area
-
+exceed585$pct_dual_or_exceed_area <- exceed585$dual_or_exceed_area / exceed585$total_area
 
 
 
 ### A
 
+ocean_data <- fread(paste0(output_directory, "all_oceans_exceedance_summary_ssp585.csv"))
+ocean_data[, pct_exceed_temp_area := temp_exceed_area / total_area]
+
+
 # percentage area of overall coral exceeded envelope vs percent area of species exceeded envelopes
-temp_envelope <-  ggplot() +
-  #species lines
-  geom_line(data = exceed585 %>% filter(species_id != "allcoral"),
-            aes(x = year, y = pct_exceed_temp_area*100, group = interaction(species_id, scenario)),
-            color = "#4292c6", alpha = 0.03, linewidth = 0.15) +
+temp_envelope <- ggplot() +
   # average of all species 
-  geom_line(data = exceed585 %>% 
-              filter(species_id != "allcoral") %>%
+  geom_line(data = exceed585_all_oceans %>% 
+              filter(species_id != "allcoral", ocean == "indo-pacific") %>%
               group_by(year, scenario) %>%
               summarize(mean_unsuitable = mean(pct_exceed_temp_area*100, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_unsuitable,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # all coral habitat line
-  geom_line(data = exceed585 %>% filter(species_id == "allcoral"),
-            aes(x = year, 
-                y = pct_exceed_temp_area*100,
-                group = scenario),
-                color = "red",
-            linewidth = 1.5) +
-  scale_y_continuous(limits = c(0, 100), 
-                     #labels = scales::percent_format(scale = 100),
+            aes(x = year, y = mean_unsuitable, group = scenario, 
+                color = "Indo-Pacific"),linewidth = 1, linetype = "dashed") +
+  geom_line(data = exceed585_all_oceans %>% 
+              filter(species_id != "allcoral", ocean == "Atlantic") %>%
+              group_by(year, scenario) %>%
+              summarize(mean_unsuitable = mean(pct_exceed_temp_area*100, na.rm = TRUE), .groups = "drop"),
+            aes(x = year, y = mean_unsuitable, group = scenario,
+                color = "Atlantic"),linewidth = 1, linetype = "dashed") +
+  # Add ocean-specific lines
+  geom_line(data = ocean_data %>% filter(ocean == "indo-pacific"),
+            aes(x = year, y = pct_exceed_temp_area*100, group = ocean,
+                color = "Indo-Pacific"),linewidth = 1, linetype = "solid") +
+  geom_line(data = ocean_data %>% filter(ocean == "Atlantic"),
+            aes(x = year, y = pct_exceed_temp_area*100, group = ocean,
+                color = "Atlantic"),linewidth = 1, linetype = "solid") +
+  scale_color_manual(name = "Ocean",
+                     values = c("Atlantic" = "blue", "Indo-Pacific" = "red")) +
+  scale_linetype_manual(name = "Type",
+                        values = c("Species mean" = "dashed", "Ecosystem mean" = "solid")) +
+  scale_y_continuous(limits = c(0, 100), expand = c(0, 0),
                      breaks = seq(0, 100, 20)) +
+  scale_x_continuous(expand = c(0, 0)) +
   labs(x = "Year",
-       y = "Area exceeding \ntemperature envelopes (%)") +
+       y = "Habitat loss (area exceeding \ntemperature envelopes (%))") +
   theme_classic() +
   theme(
     panel.spacing = unit(1, "lines"),
     strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA)
-  )
-
-
+    strip.background = element_rect(fill = "white", color = NA),
+    legend.position = c(0.95, 0.05),  # x,y coordinates (0.5 is center, 0.1 is near bottom)
+    legend.justification = c(0.5, 0), # anchor point for the legend
+    legend.background = element_rect(fill = "white", color = NA, linewidth = 0.5),
+    legend.margin = margin(6, 6, 6, 6))
 
 
 
@@ -131,341 +138,16 @@ temp_delta <-  ggplot() +
                 group = scenario),
             color = "red",
             linewidth = 1.5) +
-  scale_y_continuous(limits = c(0, 5.5),breaks=(seq(0, 5, 1))) +
+  scale_y_continuous(limits = c(-0.1, 6),breaks=(seq(0, 6, 1)),expand=c(0,0)) +
+  scale_x_continuous(limits = c(2015, 2100),breaks=(seq(2020, 2100, 20)),expand=c(0,0))+
   labs(x = "Year",
-       y = "Summer temperature \ndifference (°C)") +
+       y = "Exposure (Summer temperature \ndifference (°C))") +
   theme_classic() +
   theme(
     panel.spacing = unit(1, "lines"),
     strip.text = element_text(face = "bold"),
     strip.background = element_rect(fill = "white", color = NA)
   )
-
-
-
-
-## C
-
-exceed585_underestimate <- exceed585 %>%
-  # Get the allcoral value for each year
-  group_by(year, scenario) %>%
-  mutate(
-    # Get the allcoral percentage for comparison
-    allcoral_pct_temp = pct_exceed_temp_area[species_id == "allcoral"],
-    # Calculate the difference (species - allcoral)
-    underestimated_pct_temp = pct_exceed_temp_area - allcoral_pct_temp,
-    # pH
-    allcoral_pct_ph = pct_exceed_ph_area[species_id == "allcoral"],
-    underestimated_pct_ph = pct_exceed_ph_area - allcoral_pct_ph,
-    #dual 
-    allcoral_pct_dual = pct_exceed_dual_area[species_id == "allcoral"],
-    underestimated_pct_dual = pct_exceed_dual_area - allcoral_pct_dual
-  ) %>%
-  ungroup() %>%
-  # Filter out the allcoral row
-  filter(species_id != "allcoral")
-
-exceed585_underestimate %>%
-  summarize(
-    # Temperature
-    temp_pct_species_affected = mean(underestimated_pct_temp > 0) * 100,
-    temp_avg_magnitude = mean(underestimated_pct_temp[underestimated_pct_temp > 0], na.rm = TRUE) * 100,
-    
-    # pH
-    ph_pct_species_affected = mean(underestimated_pct_ph > 0) * 100,
-    ph_avg_magnitude = mean(underestimated_pct_ph[underestimated_pct_ph > 0], na.rm = TRUE) * 100,
-    
-    # Dual
-    dual_pct_species_affected = mean(underestimated_pct_dual > 0) * 100,
-    dual_avg_magnitude = mean(underestimated_pct_dual[underestimated_pct_dual > 0], na.rm = TRUE) * 100
-  )
-
-temp_envelope_underestimate <- ggplot() +
-  # species difference lines
-  geom_line(data = exceed585_underestimate,
-            aes(x = year, 
-                y = underestimated_pct_temp*100,
-                group = species_id),
-            color = "#4292c6",alpha = 0.03, linewidth = 0.15) +
-  # average of all species 
-  geom_line(data = exceed585_underestimate %>%
-              group_by(year) %>%
-              summarize(mean_underestimate = mean(underestimated_pct_temp, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_underestimate*100,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # Zero reference line (where species = allcoral)
-  geom_hline(yintercept = 0, color = "red", linewidth = 1) +
-  labs(x = "Year",
-       y = "Area underestimated by \nhabitat-level temperature analysis (%)") +
-  theme_classic() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA))+
-  scale_y_continuous(limits = c(-0, 100), 
-                     #labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 100, 20)) 
-
-
-
-
-### D
-
-# percentage area of overall coral exceeded envelope vs percent area of species exceeded envelopes
-
-
-ph_envelope <-  ggplot() +
-  #species lines
-  geom_line(data = exceed585 %>% filter(species_id != "allcoral"),
-            aes(x = year, 
-                y = pct_exceed_ph_area*100,
-                group = interaction(species_id, scenario)),
-            color = "#4292c6", alpha = 0.03, linewidth = 0.15) +
-  # average of all species 
-  geom_line(data = exceed585 %>% 
-              filter(species_id != "allcoral") %>%
-              group_by(year, scenario) %>%
-              summarize(pct_unsuitable = mean(pct_exceed_ph_area, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = pct_unsuitable*100,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # all coral habitat line
-  geom_line(data = exceed585 %>% filter(species_id == "allcoral"),
-            aes(x = year, 
-                y = pct_exceed_ph_area*100,
-                group = scenario),
-            color = "red",
-            linewidth = 1.5) +
-  scale_y_continuous(limits = c(0, 100), 
-                     #labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 100, 20)) +
-  scale_color_viridis_d() +
-  labs(x = "Year",
-       y = "Area falling below \npH envelopes (%)") +
-  theme_classic() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA)
-  )
- 
-
-
-### E
-
-exceedall585$mean_ph <- exceedall585$mean_ph_diff + exceedall585$ph_min
-exceedall585$mean_ph_delta <- exceedall585$mean_ph - exceedall585$ph_mean
-exceedsp585$mean_ph <- exceedsp585$mean_ph_diff + exceedsp585$ph_min
-exceedsp585$mean_ph_delta <- exceedsp585$mean_ph - exceedsp585$ph_summer_mean
-
-ph_delta <-  ggplot() +
-  #species lines
-  geom_line(data = exceedsp585 %>% filter(species_id != "allcoral"),
-            aes(x = year, 
-                y = mean_ph_delta,
-                group = interaction(species_id, scenario)),
-            color = "#4292c6", alpha = 0.03, linewidth = 0.15) +
-  # average of all species 
-  geom_line(data = exceedsp585 %>% 
-              filter(species_id != "allcoral") %>%
-              group_by(year, scenario) %>%
-              summarize(mean_summer_delta = mean(mean_ph_delta, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_summer_delta,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # all coral habitat line
-  geom_line(data = exceedall585 %>% filter(species_id == "allcoral"),
-            aes(x = year, 
-                y = mean_ph_delta,
-                group = scenario),
-            color = "red",
-            linewidth = 1.5) +
-  scale_y_continuous(limits = c(-0.45, 0.0)) +
-  labs(x = "Year",
-       y = "Summer pH difference") +
-  theme_classic() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA)
-  )
-
-
-
-## F
-
-ph_envelope_underestimate <- ggplot() +
-  # species difference lines
-  geom_line(data = exceed585_underestimate,
-            aes(x = year, 
-                y = underestimated_pct_ph*100,
-                group = species_id),
-            color = "#4292c6",alpha = 0.03, linewidth = 0.15) +
-  # average of all species 
-  geom_line(data = exceed585_underestimate %>%
-              group_by(year) %>%
-              summarize(mean_underestimate = mean(underestimated_pct_ph, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_underestimate*100,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # Zero reference line (where species = allcoral)
-  geom_hline(yintercept = 0, color = "red", linewidth = 1) +
-  labs(x = "Year",
-       y = "Area underestimated by \nhabitat-level pH analysis (%)") +
-  theme_classic() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA))+
-  scale_y_continuous(limits = c(-0, 100), 
-                     #labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 100, 20)) 
-
-
-
-
-
-
-
-
-
-## G
-
-#both temperature and ph envelopes exceeded 
-dual_envelope <-  ggplot() +
-  #species lines
-  geom_line(data = exceed585 %>% filter(species_id != "allcoral"),
-            aes(x = year, 
-                y = pct_exceed_dual_area*100,
-                group = interaction(species_id, scenario)), 
-            color = "#4292c6", alpha = 0.03, linewidth = 0.15) +
-  # average of all species 
-  geom_line(data = exceed585 %>% 
-              filter(species_id != "allcoral") %>%
-              group_by(year, scenario) %>%
-              summarize(mean_envelope = mean(pct_exceed_dual_area, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_envelope*100,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # all coral habitat line
-  geom_line(data = exceed585 %>% filter(species_id == "allcoral"),
-            aes(x = year, 
-                y = pct_exceed_dual_area*100,
-                group = scenario),
-            color = "red",
-            linewidth = 1.5) +
-  scale_y_continuous(limits = c(0, 100), 
-                     #labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 100, 20)) +  scale_color_viridis_d() +
-  labs(x = "Year",
-       y = "Area exceeding both \ntemperature and pH envelopes (%)") +
-  theme_classic() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA))
-
-
-
-
-
-#H 
-
-dual_envelope_underestimate <- ggplot() +
-  # species difference lines
-  geom_line(data = exceed585_underestimate,
-            aes(x = year, 
-                y = underestimated_pct_dual*100,
-                group = species_id),
-            color = "#4292c6",alpha = 0.03, linewidth = 0.15) +
-  # average of all species 
-  geom_line(data = exceed585_underestimate %>%
-              group_by(year) %>%
-              summarize(mean_underestimate = mean(underestimated_pct_dual, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_underestimate*100,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  # Zero reference line (where species = allcoral)
-  geom_hline(yintercept = 0, color = "red", linewidth = 1) +
-  labs(x = "Year",
-       y = "Area underestimated by \nhabitat-level dual analysis (%)") +
-  theme_classic() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA))+
-  scale_y_continuous(limits = c(-0, 100), 
-                     #labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 100, 20)) 
-
-
-
-
-
-fig1 <- plot_grid(temp_envelope, temp_delta, temp_envelope_underestimate,
-                  ph_envelope, ph_delta, ph_envelope_underestimate,
-                  dual_envelope, NULL,dual_envelope_underestimate,
-          labels = c("A", "B","C","D","E","F","G","","H"), ncol = 3,nrow=3)
-
-
-ggsave(paste0(figures_folder, "figure_1.pdf"), fig1, 
-       width = 10, height = 10, dpi = 300)  
-
-ggsave(paste0(figures_folder, "figure_1.png"), fig1, 
-       width = 10, height = 10, dpi = 350)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-### FIG 2
-
-#see range_sim.R
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-### FIG 3
-
-#simulation plot with real data
-
-#temperature and pH profiles
-
 
 
 
@@ -593,35 +275,42 @@ for(scenario in scenarios){
 #temperature profile
 temp_lat <- ggplot(combined_lat585, aes(x = latitude, y = temperature, color = scenario)) +
   geom_line(size = 1) +
-  scale_color_manual(values = c("Today" = "blue", "Future" = "red")) +
+  scale_color_manual(values = c("Today" = "blue", "Future" = "red"),
+                     labels = c("Today" = "Today", "Future" = "SSP585")) +
   theme_classic() +
-  labs(x = "Latitude", 
+  labs(x = "Latitude (degrees)", 
        y = "Mean summer \ntemperature (°C)",
        color = "Scenario") +
-  scale_x_continuous(limits=c(-40,45))
-  #theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+  scale_x_continuous(limits=c(-45,45),expand=c(0,0),breaks = seq(-45, 45, 45)) +
+  scale_y_continuous(limits=c(15,35),breaks = seq(15, 35, 5),expand=c(0,0))+
+  theme(legend.position = c(0.5, 0.1),  # x,y coordinates (0.5 is center, 0.1 is near bottom)
+        legend.justification = c(0.5, 0), # anchor point for the legend
+        legend.background = element_rect(fill = "white", color = NA, linewidth = 0.5),
+        legend.margin = margin(6, 6, 6, 6))
 
-ph_lat <- ggplot(combined_lat585, aes(x = latitude, y = ph, color = scenario)) +
-  geom_line(size = 1) +
-  scale_color_manual(values = c("Today" = "blue", "Future" = "red")) +
-  theme_classic() +
-  labs(x = "Latitude", 
-       y = "Mean summer \npH",
-       color = "Scenario") +
-  scale_x_continuous(limits=c(-40,45))
-  #theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+
 
 #temp increase v range size
-tempdelta_range <- ggplot(exceedsp585[exceedsp585$year==2100,], aes(x = total_area/exceedall585$total_area[1], y = mean_temp_delta)) +
-  #geom_point(alpha = 0.6, color = "darkred") +
-  geom_pointdensity()+
-  scale_color_gradient(low='#eff3ff',high="#2171b5") + 
+tempdelta_range <- ggplot() +
+  geom_pointdensity(data = exceedsp585[exceedsp585$year==2100,], 
+                    aes(x = total_area/exceedall585$total_area[1]*100, y = mean_temp_delta)) +
+  scale_color_gradient(low='#cbecff', high="#2171b5") +
+  geom_smooth(data = exceedsp585[exceedsp585$year==2100,],
+              aes(x = total_area/exceedall585$total_area[1]*100, y = mean_temp_delta),
+              method = "loess", span = 0.3, color = "black", se=F) +
+  geom_point(data = exceedall585[exceedall585$year==2100,], 
+             aes(x = 100, y = mean_temp_delta), 
+             color = "red", 
+             size = 3) +
   theme_classic() +
-  labs(x = "Range as proportion \nof domain size", 
-       y = "Mean temperature \nincrease (°C)")+
-  scale_x_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 1, 0.2))+
+  labs(x = "Range as proportion \nof domain area (%)", 
+       y = "Temperature exposure \nby 2100 (°C)")+
+  scale_x_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 20),
+                     expand=c(0,3))+
+  scale_y_continuous(expand=c(0,0),
+                     limits=c(3,6),
+                     breaks=seq(3,6,0.5))+
   theme(legend.position="none")
 
 
@@ -632,73 +321,142 @@ sorted_data <- exceedsp585[exceedsp585$year==2100,] %>%
 # Calculate cumulative percentage of species
 sorted_data$cum_species_pct <- seq_len(nrow(sorted_data)) / nrow(sorted_data)
 
-tempexceed_range <- ggplot(exceed585[exceed585$year==2100,], aes(x = total_area/exceedall585$total_area[1], y = pct_exceed_temp_area)) +
+#plot3 with critical range size shading
+displacement <- calculate_latitudinal_displacement(combined_lat585 %>% filter(scenario == "Today") %>% select(latitude,temperature),
+                                                   combined_lat585 %>% filter(scenario == "Future") %>% select(latitude,temperature))
+# Filter out cross-hemisphere matches
+displacement <- displacement %>%
+  mutate(cross_hemisphere = !is.na(latitude) & !is.na(future_lat) & sign(latitude) != sign(future_lat)) %>%
+  # Set displacement to NA for cross-hemisphere matches
+  mutate(displacement = ifelse(cross_hemisphere, NA, displacement),
+    display_displacement = ifelse(cross_hemisphere, NA, display_displacement))
+
+min_critical_range <- min(displacement$displacement, na.rm = TRUE)
+max_critical_range <- max(displacement$displacement, na.rm = TRUE)
+
+tempexceed_range <- ggplot(exceed585[exceed585$year==2100,] %>% filter(species_id != "allcoral"), 
+                           aes(x = total_area/exceedall585$total_area[1]*100, y = pct_exceed_temp_area*100)) +
   geom_pointdensity()+
-  scale_color_gradient(low='#eff3ff',high="#2171b5") + #scale_color for point, scale_fill for hex
+  scale_color_gradient(low='#cbecff',high="#2171b5",trans="log10") + #scale_color for point, scale_fill for hex
   geom_smooth(method = "loess", span = 0.3,color = "black",se=F) +
   # Add the cumulative species line
-  geom_line(data = sorted_data, aes(x = total_area/exceedall585$total_area[1], y = cum_species_pct), color = "blue", linewidth = 1) +
-  theme_classic() +
+  geom_line(data = sorted_data, aes(x = total_area/exceedall585$total_area[1]*100, y = cum_species_pct*100), color = "blue", linewidth = 1) +
   labs(x = "Range as proportion \nof domain size", 
-       y = "Habitat Loss \n(% Area Above Today's Max Temp)")+
-  scale_x_continuous(limits = c(0, 1), 
-                     breaks = seq(0, 1, 0.2),
-                     labels = scales::percent_format(scale = 100))+
-  scale_y_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100))+
-  theme(legend.position="none")
+       y = "Area habitat loss \nby 2100 (%)")+
+  scale_y_continuous(
+    name = "Area exceeding\n thermal envelope (%)",
+    sec.axis = sec_axis(~. * 100 / max(results_sim$exceed_max_pct), 
+                        name = "Cumulative species (%)"),
+    expand=c(0,0),
+    limits = c(0, 100.5),
+    breaks = seq(0, 100, 20)
+  ) +
+  theme_classic() +
+  labs(x = "Range as proportion \nof domain area (%)", 
+       y = "Area exceeding envelope (%)")+
+  scale_x_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 20),
+                     expand=c(0,0))+
+  theme(legend.position="none",
+        axis.title.y.right = element_text(color = "blue"),
+        axis.text.y.right = element_text(color = "blue"),
+        axis.line.y.right = element_line(color="blue"))
+  
+
+
+
+
+
+
+
+
+# % of species with range loss greater than the largest-range species loss in 2100
+exceed585_2100 <- exceed585[exceed585$year == 2100, ]
+exceed585_2100 <- exceed585_2100 %>% filter(species_id != "allcoral")
+exceed585_2100$pct_range_domain <- exceed585_2100$total_area / exceedall585$total_area[1] * 100
+bins <- seq(0, 100, by = 5)
+exceed585_2100$bin <- cut(exceed585_2100$pct_range_domain, 
+                       breaks = bins,
+                       labels = paste0(bins[-length(bins)], "-", bins[-1], "%"),
+                       include.lowest = TRUE,
+                       right = FALSE)
+largest_bin_data <- exceed585_2100[exceed585_2100$bin == "65-70%", ]
+largest_bin_mean_loss <- mean(largest_bin_data$pct_exceed_temp_area, na.rm = TRUE)
+bin_results <- data.frame()
+for (b in levels(exceed585_2100$bin)) {
+  bin_data <- exceed585_2100[exceed585_2100$bin == b, ]
+  total_species <- nrow(bin_data)
+  
+  if (total_species > 0) {
+    # Count species exceeding the threshold
+    exceeding_threshold <- sum(bin_data$pct_exceed_temp_area > largest_bin_mean_loss)
+    percentage <- (exceeding_threshold / total_species) * 100
+    
+    # Calculate standard error (for error bars)
+    p <- percentage / 100
+    se <- sqrt((p * (1 - p)) / total_species) * 100
+    
+    # Add to results
+    bin_results <- rbind(bin_results, data.frame(
+      bin = b,
+      bin_center = mean(as.numeric(gsub("%", "", unlist(strsplit(gsub("-", " ", b), " "))))),
+      percentage = percentage,
+      se = se,
+      count = total_species
+    ))
+  }
+}
+
+pct_loss_compare_largest <- ggplot(bin_results, aes(x = bin_center, y = percentage)) +
+  # Regular points
+  geom_point(data = bin_results[bin_results$bin_center != 67.5, ], size = 3) +
+  # Reference point in red
+  geom_point(data = bin_results[bin_results$bin_center == 67.5, ], size = 3, color = "red") +
+  geom_errorbar(aes(ymin = pmax(0, percentage - se), 
+                    ymax = pmin(100, percentage + se)), 
+                width = 1.5) +
+  # More concise y-axis title
+  labs(x = "Range size (% of domain area)",
+       y = "% species exceeding \nlargest-range habitat loss") +
+  theme_classic() +
+  theme(
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  scale_x_continuous(breaks = seq(0, 100, by = 10),
+                     limits = c(0, 100),
+                     expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(0, 100, by = 20),
+                     limits = c(0, 105),
+                     expand = c(0, 0)) +
+  # Optional: add annotation explaining the reference point
+  annotate("text", x = 83, y = 60, 
+           label = "Reference \nthreshold", 
+           color = "red", size = 3.5)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #distribution plot - sizes of ranges
-range_size <- ggplot(exceedsp585[exceedsp585$year==2100,],aes(x=total_area/exceedall585$total_area[1]))+
+range_size <- ggplot(exceedsp585[exceedsp585$year==2100,],aes(x=total_area/exceedall585$total_area[1]*100))+
   geom_histogram(fill = "lightgray", color = "black")+
   theme_classic()+
-  labs(x = "Range as proportion \nof domain size", 
-       y = "Count")+
-  scale_x_continuous(limits = c(0, 1), 
-                     breaks = seq(0, 1, 0.2),
-                   labels = scales::percent_format(scale = 100))+
-  scale_y_continuous(limits=c(0,100))
-
-#ph increase v range size
-phdelta_range <- ggplot(exceedsp585[exceedsp585$year==2100,], aes(x = total_area/exceedall585$total_area[1], y = mean_ph_delta)) +
-  #geom_point(alpha = 0.6, color = "darkred") +
-  geom_pointdensity()+
-  scale_color_gradient(low='#eff3ff',high="#2171b5") + 
-  theme_classic() +
-  labs(x = "Range as proportion \nof domain size", 
-       y = "Mean ph decrease")+
-  scale_x_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 1, 0.2))+
-  theme(legend.position="none")
-
-
-# % loss vs range size
-phexceed_range <- ggplot(exceed585[exceed585$year==2100,], aes(x = total_area/exceedall585$total_area[1], y = pct_exceed_ph_area)) +
-  #geom_point(alpha = 0.6, color = "darkred") +
-  geom_pointdensity()+
-  scale_color_gradient(low='#eff3ff',high="#2171b5") + #scale_color for point, scale_fill for hex
-  #scale_fill_viridis_c()+
-  theme_classic() +
-  labs(x = "Range as proportion \nof domain size", 
-       y = "Habitat loss \n(% area below today's min pH)")+
-  scale_x_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 1, 0.2))+
-  scale_y_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100))+
-  theme(legend.position="none")
-
-fig3_coral <- plot_grid(temp_lat, tempdelta_range, tempexceed_range,range_size, ph_lat,phdelta_range, phexceed_range,
-          labels = c( "A","B","C","D","E","F","G"), ncol = 4,nrow=2)
-
-
-ggsave(paste0(figures_folder, "figure_3.pdf"), fig3_coral, 
-       width = 10, height = 10, dpi = 300)  
-
-ggsave(paste0(figures_folder, "figure_3.png"), fig3_coral, 
-       width = 16, height = 6, dpi = 350)
+  labs(x = "Range as proportion \nof domain area (%)", 
+       y = "Number of species")+
+  scale_x_continuous(limits = c(-3, 100), 
+                     breaks = seq(0, 100, 20),expand=c(0,0))+
+  scale_y_continuous(limits=c(0,150),expand=c(0,0))
 
 
 
@@ -708,25 +466,139 @@ ggsave(paste0(figures_folder, "figure_3.png"), fig3_coral,
 
 
 
-
-
-
-
-
-
-
-
-
-
-### FIG 4
+### 
 # range size v distance to analog
 
 species_coord <- fread(paste0(output_directory, 'species_pixels_1982-1992.csv'))
 
-diffanalogN_585 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeansummerN', "_", "ssp585", "_rangeTemp", 
-                                                        1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
-diffanalogS_585 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeansummerS', "_", "ssp585", "_rangeTemp", 
+# Bounding box approach for calculating species range in kilometers
+species_range <- species_coord %>%
+  group_by(species_id) %>%
+  summarize(
+    # Store original min/max for reference
+    x_min = min(x),
+    x_max = max(x),
+    
+    # Latitudinal range (y coordinates)
+    y_min = min(y),
+    y_max = max(y),
+    y_range = max(y) - min(y),
+    
+    # For longitude range calculation, handle the dateline crossing
+    .x_360 = list(ifelse(x < 0, x + 360, x))
+  ) %>%
+  rowwise() %>%
+  mutate(
+    # Calculate longitude range accounting for dateline
+    x_range_corrected = {
+      # Sort the longitudes
+      x_sorted <- sort(unlist(.x_360))
+      
+      # Find the maximum gap between consecutive points
+      n <- length(x_sorted)
+      if (n <= 1) {
+        return(0)
+      }
+      
+      gaps <- c(diff(x_sorted), (x_sorted[1] + 360) - x_sorted[n])
+      max_gap <- max(gaps)
+      
+      # The actual range is 360 minus the maximum gap
+      360 - max_gap
+    },
+    
+    # Add the maximum of latitudinal and longitudinal extents
+    max_latlon_range = max(y_range, x_range_corrected),
+    
+    # Calculate range in kilometers using a bounding box approach
+    range_km = {
+      # Create an sf polygon representing the bounding box
+      # Need to handle dateline crossing
+      if (x_range_corrected > 180) {
+        # For species that cross the dateline, we need a different approach
+        # Convert all coordinates to the 0-360 system
+        x_360 <- unlist(.x_360)
+        min_x_360 <- min(x_360)
+        max_x_360 <- max(x_360)
+        
+        # Convert back to -180 to 180 system
+        min_x_180 <- ifelse(min_x_360 > 180, min_x_360 - 360, min_x_360)
+        max_x_180 <- ifelse(max_x_360 > 180, max_x_360 - 360, max_x_360)
+        
+        # Create bounding box
+        bbox <- st_bbox(c(xmin = min_x_180, ymin = y_min, 
+                          xmax = max_x_180, ymax = y_max), 
+                        crs = 4326)
+      } else {
+        # Standard case - no dateline crossing
+        bbox <- st_bbox(c(xmin = x_min, ymin = y_min, 
+                          xmax = x_max, ymax = y_max), 
+                        crs = 4326)
+      }
+      
+      # Convert to polygon
+      bbox_poly <- st_as_sfc(bbox)
+      
+      # Calculate maximum distance across the bounding box (diagonal)
+      pts <- st_cast(bbox_poly, "POINT")
+      dist_matrix <- st_distance(pts)
+      max(dist_matrix) / 1000  # Convert to kilometers
+    },
+    
+    # Add calculations for latitudinal and longitudinal ranges in km
+    lat_range_km = {
+      # Create points at the same longitude but different latitudes
+      p1 <- st_point(c(x_min, y_min))
+      p2 <- st_point(c(x_min, y_max))
+      
+      # Convert to sf objects with CRS
+      p1_sf <- st_sfc(p1, crs = 4326)
+      p2_sf <- st_sfc(p2, crs = 4326)
+      
+      # Calculate distance
+      as.numeric(st_distance(p1_sf, p2_sf)) / 1000  # Convert to kilometers
+    },
+    
+    lon_range_km = {
+      # For longitude, we need to measure at the same latitude
+      # Use the average latitude for better accuracy
+      avg_lat <- (y_min + y_max) / 2
+      
+      if (x_range_corrected > 180) {
+        # Handle dateline crossing
+        x_360 <- unlist(.x_360)
+        min_x_360 <- min(x_360)
+        max_x_360 <- max(x_360)
+        
+        # Convert back to -180 to 180 system
+        min_x_180 <- ifelse(min_x_360 > 180, min_x_360 - 360, min_x_360)
+        max_x_180 <- ifelse(max_x_360 > 180, max_x_360 - 360, max_x_360)
+        
+        p1 <- st_point(c(min_x_180, avg_lat))
+        p2 <- st_point(c(max_x_180, avg_lat))
+      } else {
+        p1 <- st_point(c(x_min, avg_lat))
+        p2 <- st_point(c(x_max, avg_lat))
+      }
+      
+      # Convert to sf objects with CRS
+      p1_sf <- st_sfc(p1, crs = 4326)
+      p2_sf <- st_sfc(p2, crs = 4326)
+      
+      # Calculate distance
+      as.numeric(st_distance(p1_sf, p2_sf)) / 1000  # Convert to kilometers
+    }
+  ) %>%
+  ungroup() %>%  # Ungroup before using select
+  dplyr::select(-starts_with("."))  # Use dplyr::select explicitly and remove temporary columns
+
+
+diffanalogN_585 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerN', "_", "ssp585", "_rangeTemp", 
                                 1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogS_585 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerS', "_", "ssp585", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogN_585 <- diffanalogN_585[, .SD[1], by = .(px_temp, py_temp)]
+diffanalogS_585 <- diffanalogS_585[, .SD[1], by = .(px_temp, py_temp)]
 
 
 species_coord$px_temp <- ifelse(species_coord$x < 0, species_coord$x + 360, species_coord$x)
@@ -741,21 +613,6 @@ sp_rangesize$species_id <- as.character(sp_rangesize$species_id)
 species_analog585$species_id <- as.character(species_analog585$species_id)
 species_analog585 <- merge(species_analog585, sp_rangesize, by = "species_id", all.x = TRUE)
 
-
-temp_plot <- ggplot(species_analog585, aes(x = total_area, y = distance_temp)) +
-  geom_point(size=0.1,alpha = 0.1) +  # Use alpha for better visibility if points overlap
-  #scale_x_log10() +  # Log scale for total_area as range sizes often span orders of magnitude
-  labs(x = "Range Size (km2)",
-    y = "Distance to Temperature Analog") +
-  theme_classic() 
-
-ph_plot <- ggplot(species_analog585, aes(x = total_area, y = distance_ph)) +
-  geom_point(size=0.1,alpha = 0.1) +
-  #scale_x_log10() +  # Log scale for total_area
-  labs(x = "Range Size (km2)",
-    y = "Distance to pH Analog") +
-  theme_classic()  
-
 species_avg <- species_analog585[, .(
   avg_distance_temp = mean(distance_temp, na.rm = TRUE),
   se_distance_temp = sd(distance_temp, na.rm = TRUE) / sqrt(.N),
@@ -764,141 +621,310 @@ species_avg <- species_analog585[, .(
   total_area = first(total_area)  # Take the first total_area value for each species
 ), by = species_id]
 
-temp_avg_plot <- ggplot(species_avg, aes(x = total_area, y = avg_distance_temp)) +
-  geom_point(size = 0.1, alpha = 0.1) +  # Small points with high transparency
-  #scale_x_log10() +  # Log scale for total_area
-  labs(x = "Range Size (km2)",
-    y = "Average Distance to Temperature Analog") +
+
+
+
+
+
+
+
+
+
+
+### SSP distance to analog v % complete habitat loss
+
+# calculate summary data for analog distances per SSP
+analog_stats_585 <- data.frame(
+  ssp = "ssp585",
+  mean_dist = mean(species_avg$avg_distance_temp, na.rm = TRUE),
+  min_dist = min(species_avg$avg_distance_temp, na.rm = TRUE),
+  max_dist = max(species_avg$avg_distance_temp, na.rm = TRUE))
+
+# Process SSP126 analog distances 
+diffanalogN_126 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerN', "_", "ssp126", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogS_126 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerS', "_", "ssp126", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogN_126 <- diffanalogN_126[, .SD[1], by = .(px_temp, py_temp)]
+diffanalogS_126 <- diffanalogS_126[, .SD[1], by = .(px_temp, py_temp)]
+
+# Merge with species coordinates (similar to what you did for SSP585)
+north_result_126 <- merge(species_coord[y >= 0], diffanalogN_126, by.x = c("x", "y"), by.y = c("px_temp", "py_temp"), all.x = TRUE)
+south_result_126 <- merge(species_coord[y < 0], diffanalogS_126,  by.x = c("x", "y"), by.y = c("px_temp", "py_temp"), all.x = TRUE)
+species_analog126 <- rbindlist(list(north_result_126, south_result_126), fill = TRUE)
+species_analog126$species_id <- as.character(species_analog126$species_id)
+species_analog126 <- merge(species_analog126, sp_rangesize, by = "species_id", all.x = TRUE)
+
+# Calculate stats per species
+species_avg_126 <- species_analog126[, .(
+  avg_distance_temp = mean(distance_temp, na.rm = TRUE),
+  se_distance_temp = sd(distance_temp, na.rm = TRUE) / sqrt(.N),
+  avg_distance_ph = mean(distance_ph, na.rm = TRUE),
+  se_distance_ph = sd(distance_ph, na.rm = TRUE) / sqrt(.N),
+  total_area = first(total_area)
+), by = species_id]
+
+# Add to stats dataframe
+analog_stats_126 <- data.frame(
+  ssp = "ssp126",
+  mean_dist = mean(species_avg_126$avg_distance_temp, na.rm = TRUE),
+  min_dist = min(species_avg_126$avg_distance_temp, na.rm = TRUE),
+  max_dist = max(species_avg_126$avg_distance_temp, na.rm = TRUE)
+)
+
+# Process SSP245 analog distances 
+diffanalogN_245 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerN', "_", "ssp245", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogS_245 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerS', "_", "ssp245", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogN_245 <- diffanalogN_245[, .SD[1], by = .(px_temp, py_temp)]
+diffanalogS_245 <- diffanalogS_245[, .SD[1], by = .(px_temp, py_temp)]
+
+# Merge with species coordinates (similar to what you did for SSP585)
+north_result_245 <- merge(species_coord[y >= 0], diffanalogN_245,  by.x = c("x", "y"), by.y = c("px_temp", "py_temp"), all.x = TRUE)
+south_result_245 <- merge(species_coord[y < 0], diffanalogS_245,  by.x = c("x", "y"), by.y = c("px_temp", "py_temp"), all.x = TRUE)
+species_analog245 <- rbindlist(list(north_result_245, south_result_245), fill = TRUE)
+species_analog245$species_id <- as.character(species_analog245$species_id)
+species_analog245 <- merge(species_analog245, sp_rangesize, by = "species_id", all.x = TRUE)
+
+# Calculate stats per species
+species_avg_245 <- species_analog245[, .(
+  avg_distance_temp = mean(distance_temp, na.rm = TRUE),
+  se_distance_temp = sd(distance_temp, na.rm = TRUE) / sqrt(.N),
+  avg_distance_ph = mean(distance_ph, na.rm = TRUE),
+  se_distance_ph = sd(distance_ph, na.rm = TRUE) / sqrt(.N),
+  total_area = first(total_area)
+), by = species_id]
+
+# Add to stats dataframe
+analog_stats_245 <- data.frame(
+  ssp = "ssp245",
+  mean_dist = mean(species_avg_245$avg_distance_temp, na.rm = TRUE),
+  min_dist = min(species_avg_245$avg_distance_temp, na.rm = TRUE),
+  max_dist = max(species_avg_245$avg_distance_temp, na.rm = TRUE)
+)
+
+# Process SSP370 analog distances 
+diffanalogN_370 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerN', "_", "ssp370", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogS_370 <- fread(paste0(output_directory_analog, "split/analogdiffdf_", 'modelmeanfocsummerS', "_", "ssp370", "_rangeTemp", 
+                                1, "_rangepH", 0.1, "_", 'hist', "-", 2100, ".csv"))
+diffanalogN_370 <- diffanalogN_370[, .SD[1], by = .(px_temp, py_temp)]
+diffanalogS_370 <- diffanalogS_370[, .SD[1], by = .(px_temp, py_temp)]
+
+# Merge with species coordinates (similar to what you did for SSP585)
+north_result_370 <- merge(species_coord[y >= 0], diffanalogN_370,  by.x = c("x", "y"), by.y = c("px_temp", "py_temp"), all.x = TRUE)
+south_result_370 <- merge(species_coord[y < 0], diffanalogS_370,  by.x = c("x", "y"), by.y = c("px_temp", "py_temp"), all.x = TRUE)
+species_analog370 <- rbindlist(list(north_result_370, south_result_370), fill = TRUE)
+species_analog370$species_id <- as.character(species_analog370$species_id)
+species_analog370 <- merge(species_analog370, sp_rangesize, by = "species_id", all.x = TRUE)
+
+# Calculate stats per species
+species_avg_370 <- species_analog370[, .(
+  avg_distance_temp = mean(distance_temp, na.rm = TRUE),
+  se_distance_temp = sd(distance_temp, na.rm = TRUE) / sqrt(.N),
+  avg_distance_ph = mean(distance_ph, na.rm = TRUE),
+  se_distance_ph = sd(distance_ph, na.rm = TRUE) / sqrt(.N),
+  total_area = first(total_area)
+), by = species_id]
+
+# Add to stats dataframe
+analog_stats_370 <- data.frame(
+  ssp = "ssp370",
+  mean_dist = mean(species_avg_370$avg_distance_temp, na.rm = TRUE),
+  min_dist = min(species_avg_370$avg_distance_temp, na.rm = TRUE),
+  max_dist = max(species_avg_370$avg_distance_temp, na.rm = TRUE)
+)
+
+# Combine all analog stats
+analog_stats <- rbind(analog_stats_126, analog_stats_245, analog_stats_370, analog_stats_585)
+
+# Calculate percentage of species with complete habitat loss by 2100 for each SSP
+# For SSP585
+exceedsp585_2100 <- exceedsp585[year == 2100]
+total_species_585 <- length(unique(exceedsp585_2100$species_id))
+complete_loss_585 <- exceedsp585_2100[, .(
+  habitat_loss_percent = (temp_exceed_area / total_area) * 100
+), by = species_id]
+complete_loss_count_585 <- nrow(complete_loss_585[habitat_loss_percent >= 99])
+percent_loss_585 <- (complete_loss_count_585 / total_species_585) * 100
+
+# SSP126
+exceedsp126_2100 <- exceedsp126[year == 2100]
+total_species_126 <- length(unique(exceedsp126_2100$species_id))
+complete_loss_126 <- exceedsp126_2100[, .(
+  habitat_loss_percent = (temp_exceed_area / total_area) * 100
+), by = species_id]
+complete_loss_count_126 <- nrow(complete_loss_126[habitat_loss_percent >= 99])
+percent_loss_126 <- (complete_loss_count_126 / total_species_126) * 100
+
+# SSP245 
+exceedsp245_2100 <- exceedsp245[year == 2100]
+total_species_245 <- length(unique(exceedsp245_2100$species_id))
+complete_loss_245 <- exceedsp245_2100[, .(
+  habitat_loss_percent = (temp_exceed_area / total_area) * 100
+), by = species_id]
+complete_loss_count_245 <- nrow(complete_loss_245[habitat_loss_percent >= 99])
+percent_loss_245 <- (complete_loss_count_245 / total_species_245) * 100
+
+# SSP370
+exceedsp370_2100 <- exceedsp370[year == 2100]
+total_species_370 <- length(unique(exceedsp370_2100$species_id))
+complete_loss_370 <- exceedsp370_2100[, .(
+  habitat_loss_percent = (temp_exceed_area / total_area) * 100
+), by = species_id]
+complete_loss_count_370 <- nrow(complete_loss_370[habitat_loss_percent >= 99])
+percent_loss_370 <- (complete_loss_count_370 / total_species_370) * 100
+
+# Combine habitat loss percentages
+habitat_loss_data <- data.frame(
+  ssp = c("ssp126", "ssp245", "ssp370", "ssp585"),
+  percent_loss = c(percent_loss_126, percent_loss_245, percent_loss_370, percent_loss_585))
+
+# Merge analog stats and habitat loss data
+analog_habitatloss_data <- merge(analog_stats, habitat_loss_data, by = "ssp")
+
+# Create more readable SSP labels
+analog_habitatloss_data$ssp_label <- factor(analog_habitatloss_data$ssp, 
+                              levels = c("ssp126", "ssp245", "ssp370", "ssp585"),
+                              labels = c("SSP1-2.6", "SSP2-4.5", "SSP3-7.0", "SSP5-8.5"))
+
+# Order SSPs by warming scenario
+analog_habitatloss_data <- analog_habitatloss_data[order(analog_habitatloss_data$ssp_label), ]
+
+# Create the plot
+analog_loss <- ggplot(analog_habitatloss_data, aes(x = mean_dist, y = percent_loss)) +
+  geom_point(size = 3,alpha=0.5) +
+  geom_segment(aes(x = min_dist, xend = max_dist, y = percent_loss, yend = percent_loss), 
+               size = 1,alpha=0.5) +
+  geom_text(aes(x = max_dist, label = ssp_label), 
+            hjust = -0.1, 
+            vjust = 0.3,  
+            size = 3.5) +  
+  scale_x_continuous(limits=c(0,4000),label=scales::comma,expand=c(0,0))+
+  scale_y_continuous(limits=c(0,40),expand=c(0,0))+
+  labs(x = "Distance to temperature analog (km)",
+       y = "Species with complete \nhabitat loss by 2100 (%)") +
   theme_classic() 
 
-ph_avg_plot <- ggplot(species_avg, aes(x = total_area, y = avg_distance_ph)) +
-  geom_point(size = 0.1, alpha = 0.1) +  # Small points with high transparency
-  #scale_x_log10() +  # Log scale for total_area
-  labs(x = "Range Size (km2)",
-    y = "Average Distance to pH Analog") +
-  theme_classic()
 
-temp_error_plot <- ggplot(species_avg, aes(x = total_area, y = avg_distance_temp)) +
+
+
+
+
+
+species_range$species_id <- as.character(species_range$species_id)
+species_range$range_km <- as.numeric(species_range$range_km)
+
+species_avg <- merge(species_avg, exceedsp585 %>% dplyr::select(species_id, total_area ), by = "species_id", all.x = TRUE)
+species_avg_370 <- merge(species_avg_370, exceedsp585 %>% dplyr::select(species_id, total_area ), by = "species_id", all.x = TRUE)
+species_avg_245 <- merge(species_avg_245, exceedsp585 %>% dplyr::select(species_id, total_area ), by = "species_id", all.x = TRUE)
+species_avg_126 <- merge(species_avg_126, exceedsp585 %>% dplyr::select(species_id, total_area ), by = "species_id", all.x = TRUE)
+
+species_avg_126$scenario <- "SSP126"
+species_avg_245$scenario <- "SSP245" 
+species_avg_370$scenario <- "SSP370"
+species_avg$scenario <- "SSP585"
+species_avg_all<- rbind(species_avg_126, species_avg_245, species_avg_370,species_avg)
+
+#just ssp585
+ggplot(species_avg, aes(x = lat_range_km, y = avg_distance_temp)) +
   geom_point(size = 0.1, alpha = 0.2) +  # Small points with high transparency
   geom_errorbar(aes(ymin = avg_distance_temp - se_distance_temp, 
                     ymax = avg_distance_temp + se_distance_temp),
                 width = 0.1, alpha = 0.2) +  # Error bars with transparency
-  #scale_x_log10() +  # Log scale for total_area
-  labs(x = "Range Size (total area)",
-    y = "Average Distance to Temperature Analog") +
-  theme_classic() 
-
-ph_error_plot <- ggplot(species_avg, aes(x = total_area, y = avg_distance_ph)) +
-  geom_point(size = 0.1, alpha = 0.2) +  # Small points with high transparency
-  geom_errorbar(aes(ymin = avg_distance_ph - se_distance_ph, 
-                    ymax = avg_distance_ph + se_distance_ph),
-                width = 0.1, alpha = 0.2) +  # Error bars with transparency
-  #scale_x_log10() +  # Log scale for total_area
-  labs(x = "Range Size (total area)",
-    y = "Average Distance to pH Analog") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  scale_x_continuous(label=scales::comma,limits=c(0,10000),breaks=c(seq(0,10000,5000)),expand=c(0,0))+
+  scale_y_continuous(label=scales::comma,limits = c(0,3200),breaks=(seq(0, 3000, 1000)),expand=c(0,0))+
+  labs(x = "Range size (km)",
+       y = "Distance to \ntemperature analog (km)") +
   theme_classic() 
 
 
-plot_grid(temp_plot, ph_plot,temp_avg_plot, ph_avg_plot,
-          labels = c( "A","B","C","D"), ncol = 2,nrow=2)
+#all ssp
+ggplot(species_avg_all, aes(x = lat_range_km, y = avg_distance_temp, color = scenario)) +
+  geom_point(size = 0.1, alpha = 0.4) +
+  geom_errorbar(aes(ymin = avg_distance_temp - se_distance_temp, 
+                    ymax = avg_distance_temp + se_distance_temp),
+                width = 0.1, alpha = 0.4) +
+  scale_color_manual(values = c(
+    "SSP126" = "#4DAF4A",
+    "SSP245" = "#FFFF33",
+    "SSP370" = "#FF7F00",
+    "SSP585" = "#E41A1C" )) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  scale_x_continuous(label=scales::comma,limits=c(0,10000),breaks=c(seq(0,10000,5000)),expand=c(0,0))+
+  scale_y_continuous(label=scales::comma,limits = c(0,3200),breaks=(seq(0, 3000, 1000)),expand=c(0,0))+
+  labs(x = "Range size (km)",
+       y = "Distance to \ntemperature analog (km)") +
+  theme_classic()
 
-plot_grid(temp_error_plot, ph_error_plot,
-          labels = c( "A","B"), ncol = 2,nrow=1)
+#all ssp as density plot
+
+# Create the density plot with the combined dataframe
+temp_analog <- ggplot(species_avg_all, aes(x = lat_range_km , y = avg_distance_temp, fill = scenario)) +
+  stat_density_2d(geom = "polygon",bins = 50,contour = TRUE,alpha = 0.3) +
+  scale_fill_manual(
+    values = c(
+      "SSP126" = "#4DAF4A",
+      "SSP245" = "#FFFF33",
+      "SSP370" = "#FF7F00",
+      "SSP585" = "#E41A1C" ),
+    name = "Scenario") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  scale_x_continuous(label=scales::comma,limits=c(0,10000),breaks=c(seq(0,10000,5000)),expand=c(0,0))+
+  scale_y_continuous(label=scales::comma,limits = c(0,2000),breaks=(seq(0, 2000, 1000)),expand=c(0,0))+
+  labs(x = "Latitudinal range size (km)",
+    y = "Distance to \ntemperature analog (km)") +
+  theme_classic()
 
 
-
-
-
-
-
-
-
-
-
-
-### FIG 5
-
-#range size v habitat loss by 2100, colored by family
-
-species_family <- species_envelope[, .(species_id = id_no, family)]
-exceed585 <- merge(exceed585, species_family, by = "species_id")
-
-ggplot(exceed585[exceed585$year==2100,], aes(x = total_area/exceedall585$total_area[1], y = pct_exceed_temp_area, color = family)) +
-  geom_point(alpha = 0.6) +
+temp_analog <- ggplot(species_avg_all, aes(x = total_area/exceedall585$total_area[1]*100, y = avg_distance_temp, fill = scenario)) +
+  stat_density_2d(geom = "polygon", bins = 50, contour = TRUE, alpha = 0.3) +
+  scale_fill_manual(
+    values = c(
+      "SSP126" = "#4DAF4A",
+      "SSP245" = "#FFFF33",
+      "SSP370" = "#FF7F00",
+      "SSP585" = "#E41A1C" ),
+    name = "Scenario") +
+  scale_x_continuous(label = scales::comma, limits = c(0, 70), breaks = c(seq(0, 70, 10)), expand = c(0, 0)) +
+  scale_y_continuous(label = scales::comma, limits = c(0, 2000), breaks = (seq(0, 2000, 1000)), expand = c(0, 0)) +
+  labs(x = "Range as proportion \nof domain area (%)",
+       y = "Distance to \n temperature analog (km)") +
   theme_classic() +
-  labs(x = "Range as proportion \nof domain size", 
-       y = "Habitat Loss \n(% Area Above Today's Max Temp)")+
-  scale_x_continuous(limits = c(0, 1), 
-                     breaks = seq(0, 1, 0.2),
-                     labels = scales::percent_format(scale = 100))+
-  scale_y_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100))+
-  theme(legend.position="none")
+  # theme(legend.position = c(0.8, 0.5),  # Position in the bottom right corner
+  #       legend.background = element_rect(fill = "white", color = NA),
+  #       legend.margin = margin(6, 6, 6, 6),
+  #       legend.box.background = element_rect(color = "white"))+
+  theme(legend.position = "none") +
+  annotate("text", x = 60, y = 300, label = "SSP126", color = "black", fontface = "bold") +
+  annotate("text", x = 60, y = 900, label = "SSP245", color = "black", fontface = "bold") +
+  annotate("text", x = 60, y = 1300, label = "SSP370", color = "black", fontface = "bold") +
+  annotate("text", x = 60, y = 1700, label = "SSP585", color = "black", fontface = "bold")
 
 
 
 
 
-#histogram by family
-ggplot(exceedsp585[exceedsp585$year==2100,],aes(x=family))+
-  geom_bar(fill = "lightgray", color = "black")+
-  theme_classic()+
-  labs(x = "Family", 
-       y = "Count")+
-  scale_y_continuous(limits=c(0,60))+
-  coord_flip()
 
 
+fig3_coral <- plot_grid(temp_lat,range_size, tempdelta_range,tempexceed_range,
+                        pct_loss_compare_largest, temp_envelope,analog_loss,aragexceed_range,
+                        labels = c( "A","B","C","D","E","F","G","H"), ncol = 4,nrow=2,align="hv")
 
-# coral family and exceeded envelopes
 
-species_envelope <- fread(paste0(output_directory, 'climate_envelopes_1982-1992.csv'))
-species_family <- species_envelope[, .(species_id = id_no, family)]
+ggsave(paste0(figures_folder, "fig3.pdf"), fig3_coral, 
+       width = 15, height = 6, dpi = 300)  
 
-all_species_data <- merge(all_species_data, species_family, by = "species_id")
-exceed585 <- merge(exceed585,species_family,by = "species_id")
+ggsave(paste0(figures_folder, "fig3.png"), fig3_coral, 
+       width = 15, height = 6, dpi = 350)
 
-species_medians <- all_species_data[, .(
-  temp_median = median(temp_exceed),
-  ph_median = median(abs(ph_exceed)) 
-), by = family]
 
-temp_order <- species_medians[order(-temp_median)]$family  
-ph_order <- species_medians[order(-ph_median)]$family
 
-all_species_data[, temp_family := factor(family, levels = temp_order)]
-all_species_data[, ph_family := factor(family, levels = ph_order)]
 
-#as boxplot
-fam_temp <- ggplot(all_species_data, aes(x = factor(family, levels = temp_order), 
-                                         y = temp_exceed)) +  
-  geom_boxplot(fill = "#FFA07A", alpha = 0.7) +
-  geom_boxplot(data = all_coral_data,
-               aes(x = "All Coral", y = temp_exceed),
-               fill = "red", alpha = 0.7) +
-  scale_x_discrete(limits = c("All Coral", temp_order)) +
-  coord_flip() +
-  theme_minimal() +
-  labs(x = "Family",
-       y = "Temperature Exceedance (°C)") +
-  theme(legend.position = "none",
-        panel.grid.minor = element_blank())
 
-fam_ph <- ggplot(all_species_data, aes(x = factor(family, levels = ph_order), 
-                                       y = ph_exceed)) +  
-  geom_boxplot(fill = "#87CEEB", alpha = 0.7) +
-  geom_boxplot(data = all_coral_data,
-               aes(x = "All Coral", y = ph_exceed),
-               fill = "blue", alpha = 0.7) +
-  scale_x_discrete(limits = c("All Coral", ph_order)) +
-  coord_flip() +
-  theme_minimal() +
-  labs(x = "Family",
-       y = "pH Exceedance") +
-  theme(legend.position = "none",
-        panel.grid.minor = element_blank())
 
-plot_grid(fam_temp, fam_ph, labels = c("A", "B"), ncol = 2)
 
 
 
@@ -912,451 +938,6 @@ plot_grid(fam_temp, fam_ph, labels = c("A", "B"), ncol = 2)
 
 
 
-
-
-#as scatterplot
-ggplot(all_species_data, aes(x = temp_exceed, y = ph_exceed, color = family)) +
-  geom_point(alpha = 0.2, size = 2) +
-  theme_minimal() +
-  labs(x = "Temperature exceedance (°C)",
-       y = "pH exceedance") +
-  theme(panel.grid = element_blank(),
-        legend.position = "right",
-        legend.title = element_blank())
-
-
-#as scatterplot means only per species
-species_means <- all_species_data[, .(
-  mean_temp_exceed = mean(temp_exceed, na.rm = TRUE),
-  mean_ph_exceed = mean(ph_exceed, na.rm = TRUE),
-  total_sp_area = sum(sp_area,na.rm=T)
-), by = .(species_id, family)]
-
-ggplot(species_means, aes(x = mean_temp_exceed, y = mean_ph_exceed, color = total_sp_area)) +
-  geom_point(alpha = 0.8, size = 2.5) +
-  scale_color_viridis_c(option = "plasma", direction = -1) + 
-  theme_minimal() +
-  labs(x = "Mean temperature exceedance (°C)",
-       y = "Mean pH exceedance",
-       color = "Species range \nsize (km²)") +
-  theme(panel.grid = element_blank(),
-        legend.position = "right")
-
-dhw585 <- dhw585 %>% mutate(species_id = as.character(species_id))
-exceed585_2100 <- exceed585 %>% filter(year == 2100)
-dhw_2100 <- dhw585 %>% filter(year == 2100)
-combined_data <- exceed585_2100 %>%
-  select(species_id, total_area, temp_exceed_area, ph_exceed1_area, dual_exceed_area,
-         pct_exceed_temp_area, pct_exceed_ph_area, pct_exceed_dual_area) %>%
-  left_join(dhw_2100 %>% select(species_id, dhw_exceed_area, dhw_exceed_pct),
-            by = "species_id") %>%
-  left_join(all_species_data %>% 
-              select(species_id, family) %>% 
-              distinct(),
-            by = "species_id")
-
-
-
-#as scatterplot means only per family
-family_means <- exceed585_2100 %>%
-  group_by(family) %>%
-  summarize(
-    mean_pct_temp_exceed_area = mean(pct_exceed_temp_area, na.rm = TRUE),
-    mean_pct_ph_exceed_area = mean(pct_exceed_ph_area, na.rm = TRUE),
-    mean_temp_exceed = mean(mean_temp_exceed, na.rm = TRUE),
-    mean_ph_exceed = mean(mean_ph_exceed, na.rm = TRUE),
-    mean_temp_diff = mean(mean_temp_diff, na.rm = TRUE),
-    mean_ph_diff = mean(mean_ph_diff, na.rm = TRUE)
-  )
-ggplot() +
-  # individual species points 
-  geom_point(data = exceed585_2100, 
-             aes(x = pct_exceed_temp_area, y = pct_exceed_ph_area, color = family),
-             alpha = 0.2) +
-  # family means 
-  geom_point(data = family_means, 
-             aes(x = mean_pct_temp_exceed_area, y = mean_pct_ph_exceed_area, color = family),
-             size = 4) +
-  #coral habitat
-  geom_point(data=exceedall585[exceedall585$year==2100,],
-             aes(x = temp_exceed_area/total_area, y = ph_exceed_area/total_area),
-                 color="black", size=4)+
-  scale_x_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 1, 0.2)) +
-  
-  scale_y_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 1, 0.2)) +
-  labs(
-    x = "% area temperature exceeded",
-    y = "% area pH exceeded",
-    color = "Family"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "right")
-
-
-#scatterplot exceedance temp & ph
-ggplot() +
-  # individual species points 
-  geom_point(data = exceed585_2100, 
-             aes(x = mean_temp_exceed, y = mean_ph_exceed, color = family),
-             alpha = 0.2) +
-  # family means 
-  geom_point(data = family_means, 
-             aes(x = mean_temp_exceed, y = mean_ph_exceed, color = family),
-             size = 4) +
-  #coral habitat
-  geom_point(data=exceedall585[exceedall585$year==2100,],
-             aes(x = mean_temp_exceed, y = mean_ph_exceed),
-             color="black", size=4)+
-  labs(
-    x = "Mean temperature exceeded",
-    y = "Mean pH exceeded",
-    color = "Family"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "right")
-
-
-#scatterplot difference temp & ph
-ggplot() +
-  # individual species points 
-  geom_point(data = exceed585_2100, 
-             aes(x = mean_temp_diff, y = mean_ph_diff, color = family),
-             alpha = 0.2) +
-  # family means 
-  geom_point(data = family_means, 
-             aes(x = mean_temp_diff, y = mean_ph_diff, color = family),
-             size = 4) +
-  #coral habitat
-  geom_point(data=exceedall585[exceedall585$year==2100,],
-             aes(x = mean_temp_diff, y = mean_ph_diff),
-             color="black", size=4)+
-  labs(
-    x = "Mean temperature \n envelope vs value",
-    y = "Mean pH \n envelope vs value",
-    color = "Family"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "right")
-
-
-#line dual stressor per year by family
-family_dual <- exceed585 %>%
-  group_by(family, year) %>%
-  summarize(avg_dual_exceed_area = mean(dual_exceed_area, na.rm = TRUE),
-            avg_pct_dual_exceed_area = mean(pct_exceed_dual_area,na.rm=T),
-            .groups = "drop")
-
-ggplot() +
-  geom_line(data=family_dual,aes(x = year, y = avg_pct_dual_exceed_area, color = family, group = family),linewidth = 1) +
-  geom_line(data=exceedall585,aes(x=year,y=dual_exceed_area/total_area),color="red",linewidth=2)+
-  theme_minimal() +
-  labs(x = "Year",
-       y = "Mean % area \ndual exceedance",
-       color = "Family") +
-  theme(legend.position = "right",
-        panel.grid.minor = element_blank(),
-        text = element_text(size = 12))
-
-
-
-
-
-
-
-
-# dhw asb year vs year
-dhw585 <- rbind(dhwsp585,dhwall585)
-dhw585$dhw_exceed_pct <- dhw585$dhw_exceed_area / dhw585$total_area
-dhwsp585$dhw_exceed_pct <- dhwsp585$dhw_exceed_area / dhwsp585$total_area
-dhwall585$dhw_exceed_pct <- dhwall585$dhw_exceed_area / dhwall585$total_area
-
-dhw_asbarea <- ggplot() +
-  geom_line(data=dhw585 %>% filter(species_id != "allcoral"),
-            aes(x = year, y = dhw_exceed_pct, group = species_id),
-            alpha = 0.1, linewidth = 0.2) + 
-  # average of all species 
-  geom_line(data = dhw585 %>% 
-              filter(species_id != "allcoral") %>%
-              group_by(year, scenario) %>%
-              summarize(mean_dhw_exceed = mean(dhw_exceed_pct, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_dhw_exceed,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  geom_line(data=dhw585%>% filter(species_id == "allcoral"),
-            aes(x = year, y = dhw_exceed_pct),
-            color="red",linewidth=1.5)+
-  theme_minimal() +
-  labs(x = "Year",
-       y = "% area experiencing bleaching") +
-  theme(
-    legend.position = "right",
-    panel.grid.minor = element_blank()
-  )
-
-dhw_asbdur <- ggplot() +
-  geom_line(data=dhw585 %>% filter(species_id != "allcoral"),
-            aes(x = year, y = mean_dhw_duration, group = species_id),
-            alpha = 0.1, linewidth = 0.2) + 
-  # average of all species 
-  geom_line(data = dhw585 %>% 
-              filter(species_id != "allcoral") %>%
-              group_by(year, scenario) %>%
-              summarize(mean_dhw_duration = mean(mean_dhw_duration, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_dhw_duration,
-                group = scenario),
-            color = "blue",
-            linewidth = 1.5) +
-  geom_line(data=dhw585%>% filter(species_id == "allcoral"),
-            aes(x = year, y = mean_dhw_duration),
-            color="red",linewidth=1.5)+
-  theme_minimal() +
-  labs(x = "Year",
-       y = "Mean Duration (months)") +
-  theme(
-    legend.position = "right",
-    panel.grid.minor = element_blank()
-  )
-
-plot_grid(dhw_asbarea, dhw_asbdur, labels = c("A", "B"), ncol = 2,nrow=1)
-
-
-bleachingsp50 <- dhwsp585 %>%
-  group_by(species_id, family) %>%
-  filter(dhw_exceed_pct >= 0.50) %>%
-  arrange(year) %>%
-  slice(1) %>%
-  select(species_id, family, year)
-all_bleaching50 <- dhwall585 %>%
-  filter(dhw_exceed_pct >= 0.50) %>%
-  arrange(year) %>%
-  slice(1) %>%
-  mutate(family = "HABITAT") %>%
-  select(species_id, family, year)
-bleaching50 <- bind_rows(bleachingsp50, all_bleaching50)
-family_counts <- bleaching50 %>%
-  group_by(family) %>%
-  summarize(count = n())
-
-ggplot(bleaching50, aes(x = reorder(family, year, FUN = median), y = year)) +
-  geom_boxplot(fill = "coral3", alpha = 0.8) +
-  geom_boxplot(data = bleaching50 %>% filter(family == "ALL CORAL"), 
-               fill = "red", alpha = 0.8) +  # Highlight ALL CORAL
-  geom_text(data = family_counts, aes(x = family, y = 2020, label = count), 
-            hjust = -0.2, size = 3) +
-  scale_y_continuous(limits = c(2020, 2065)) +
-  coord_flip() +
-  labs(x = "Family",
-       y = "Year") +
-  theme_minimal() +
-  theme(axis.text.y = element_text(size = 8))
-
-### supplements
-
-
-
-
-
-
-
-
-
-
-
-#quartiles 
-#
-species_sizes <- exceed585 %>%
-  filter(species_id != "allcoral" & year == 2100) %>%
-  select(species_id, total_area) %>%
-  distinct()
-
-# Calculate quartiles and assign each species to a quartile
-quartile_breaks <- quantile(species_sizes$total_area, probs = c(0, 0.25, 0.5, 0.75, 1), na.rm = TRUE)
-species_sizes <- species_sizes %>%
-  mutate(size_quartile = cut(total_area, 
-                             breaks = quartile_breaks,
-                             labels = c("Q1 (Small)", "Q2 (Medium-Small)", "Q3 (Medium-Large)", "Q4 (Large)"),
-                             include.lowest = TRUE))
-
-
-
-
-
-
-# Join this information back to the exceed585_long dataset
-exceed585_long_with_quartiles <- exceed585_long %>%
-  left_join(species_sizes %>% select(species_id, size_quartile), by = "species_id")
-
-temp_envelope_quart <-  ggplot() +
-  #species lines
-  geom_line(data = exceed585_long_with_quartiles %>% filter(species_id != "allcoral" & variable == "Temperature"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = interaction(species_id, scenario),
-            ), #color = scenario
-            alpha = 0.1, linewidth = 0.2) +
-  # quartile mean lines
-  geom_line(data = exceed585_long_with_quartiles %>% 
-              filter(species_id != "allcoral" & variable == "Temperature" & !is.na(size_quartile)) %>%
-              group_by(year, scenario, size_quartile) %>%
-              summarize(mean_unsuitable = mean(unsuitable_area, na.rm = TRUE), .groups = "drop"),
-            aes(x = year, 
-                y = mean_unsuitable * 100,
-                group = interaction(size_quartile, scenario),
-                color = size_quartile),
-            linewidth = 1.2) +
-  # all coral habitat line
-  geom_line(data = exceed585_long %>% filter(species_id == "allcoral" & variable == "Temperature"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = scenario),
-            color = "red",
-            linewidth = 1.5) +
-  scale_y_continuous(limits = c(0, 100)) +
-  scale_color_manual(values = c("#ADD8E6", "#6495ED", "#4169E1", "#00008B"),  
-                     name = "Range Size Quartile") +
-  labs(x = "Year",
-       y = "% area exceeding temperature envelopes") +
-  theme_minimal() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA)
-  )
-
-
-
-
-
-legend_data <- data.frame(
-  x = rep(1, 8),
-  y = 1:8,
-  variable = rep(c("pH", "pH1", "pH2", "pH3"), each = 2),
-  coral_type = rep(c("All coral", "Individual species"), 4)
-)
-
-# Create color and linetype scales
-ph_label_map <- c(
-  "pH" = "envelope exceeded",
-  "pH1" = "0.1 pH below",
-  "pH2" = "0.2 pH below", 
-  "pH3" = "0.3 pH below"
-)
-
-color_map <- c(
-  "pH" = "black",
-  "pH1" = "#FFEA00",
-  "pH2" = "orange",
-  "pH3" = "red"
-)
-
-ph_envelope_legend <-  ggplot() +
-  #species lines
-  geom_line(data = exceed585_long %>% filter(species_id != "allcoral" & variable == "pH"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = interaction(species_id, scenario)),
-            color = "black",
-            alpha = 0.1, linewidth = 0.2) +
-  # all coral habitat line
-  geom_line(data = exceed585_long %>% filter(species_id == "allcoral" & variable == "pH"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = scenario),
-            color = "black",
-            linewidth = 1.5,linetype="dashed") +
-  #species lines
-  geom_line(data = exceed585_long %>% filter(species_id != "allcoral" & variable == "pH1"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = interaction(species_id, scenario)),
-            color = "#FFEA00", 
-            alpha = 0.1, linewidth = 0.2) +
-  # all coral habitat line
-  geom_line(data = exceed585_long %>% filter(species_id == "allcoral" & variable == "pH1"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = scenario),
-            color = "#FFEA00",
-            linewidth = 1.5,linetype="dashed") +
-  #species lines
-  geom_line(data = exceed585_long %>% filter(species_id != "allcoral" & variable == "pH2"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = interaction(species_id, scenario)),
-            color = "orange", 
-            alpha = 0.1, linewidth = 0.2) +
-  # all coral habitat line
-  geom_line(data = exceed585_long %>% filter(species_id == "allcoral" & variable == "pH2"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = scenario),
-            color = "orange",
-            linewidth = 1.5,linetype="dashed") +
-  #species lines
-  geom_line(data = exceed585_long %>% filter(species_id != "allcoral" & variable == "pH3"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = interaction(species_id, scenario)),
-            color = "red", 
-            alpha = 0.1, linewidth = 0.2) +
-  # all coral habitat line
-  geom_line(data = exceed585_long %>% filter(species_id == "allcoral" & variable == "pH3"),
-            aes(x = year, 
-                y = unsuitable_area * 100,
-                group = scenario),
-            color = "red",
-            linewidth = 1.5,linetype="dashed") +
-  scale_y_continuous(limits = c(0, 100)) +
-  scale_color_viridis_d() +
-  labs(x = "Year",
-       y = "Area exceeding pH envelopes (%)") +
-  theme_minimal() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA)
-  )+
-  # Add a geom_line with dummy data solely for the legend
-  geom_line(data = legend_data,
-            aes(x = x, y = y, 
-                color = variable,
-                linetype = coral_type,
-                linewidth = coral_type),
-            alpha = 1,
-            show.legend = TRUE) +
-  scale_color_manual(values = color_map,
-                     labels = ph_label_map,
-                     name = "") +
-  scale_linetype_manual(values = c("All coral" = "dashed", 
-                                   "Individual species" = "solid"),
-                        name = "") +
-  scale_linewidth_manual(values = c("All coral" = 1.5, 
-                                    "Individual species" = 0.8),
-                         guide = "none") +
-  scale_y_continuous(limits = c(0, 100)) +
-  labs(x = "Year",
-       y = "Area exceeding pH envelopes (%)") +
-  theme_minimal() +
-  theme(
-    panel.spacing = unit(1, "lines"),
-    strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "white", color = NA),
-    legend.position = "right"
-  ) +
-  # Hide the dummy geom_line
-  coord_cartesian(xlim = range(exceed585_long$year))
-
-ph_legend <- get_legend(ph_envelope_legend)
-
-ph_envelope <- ph_envelope_legend +
-  theme(legend.position = "none")
 
 
 

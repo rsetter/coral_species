@@ -58,117 +58,6 @@ generate_segments <- function(num_segments, min_size, max_size, latitude_range =
     end = numeric(num_segments)
   )
   
-  for (i in 1:num_segments) {
-    valid_segment <- FALSE
-    attempt <- 0
-    max_attempts <- 100
-    
-    while (!valid_segment && attempt < max_attempts) {
-      attempt <- attempt + 1
-      
-      # Generate random size within limits based on distribution
-      size <- if (distribution == "uniform") {
-        # Even distribution (uniform)
-        round(runif(1, min_size, max_size))
-      } else if (distribution == "normal") {
-        # Normal distribution centered between min and max
-        mean_size <- (min_size + max_size) / 2
-        sd_size <- (max_size - min_size) / 6  # ~99.7% of values within range
-        # Ensure the size stays within bounds
-        round(max(min_size, min(max_size, rnorm(1, mean_size, sd_size))))
-      } else if (distribution == "left_skewed") {
-        # Left skewed (more larger sizes)
-        # Using beta distribution with shape parameters favoring larger values
-        round(min_size + (max_size - min_size) * rbeta(1, 5, 2))
-      } else if (distribution == "right_skewed") {
-        # Right skewed (more smaller sizes)
-        # Using beta distribution with shape parameters favoring smaller values
-        round(min_size + (max_size - min_size) * rbeta(1, 2, 5))
-      } else if (distribution == "lognormal") {
-        # Very right-skewed 
-        # Using lognormal with sigma=2
-        #meanlog <- log(min_size) # Set log-scale mean to create desired distribution
-        #sigma <- 2
-        # Generate from lognormal and cap at max_size
-        #round(min(max_size, exp(rnorm(1, meanlog, sigma))))
-        
-        # Create a hollow curve distribution 
-        alpha <- 0.3  # Very small alpha creates strong right skew (many small values)
-        beta <- 1   # Higher beta concentrates values toward small end
-        # Scale to desired range
-        size <- min_size + (max_size - min_size) * rbeta(1, alpha, beta)
-        round(size)
-      } else if (distribution == "inverse_lognormal") {
-        # Inverse of lognormal - many large sizes, few small ones
-        # First generate lognormal
-        #meanlog <- log(min_size)
-        #sigma <- 2
-        #log_val <- exp(rnorm(1, meanlog, sigma))
-        # Then invert the distribution within our range
-        #round(max(min_size, max_size - min(max_size - min_size, log_val)))
-        
-        # Inverse distribution - more large segments
-        alpha <- 3.0 
-        beta <- 0.3  # Very small beta creates strong left skew (many large values)
-        # Scale to desired range
-        size <- min_size + (max_size - min_size) * rbeta(1, alpha, beta)
-        round(size)
-      } else {
-        # Default to uniform if invalid option is provided
-        round(runif(1, min_size, max_size))
-      }
-      
-      # Generate random center position
-      center <- round(runif(1, min_lat + size/2, max_lat - size/2))
-      
-      # Calculate start and end points
-      start <- center - size/2
-      end <- center + size/2
-      
-      # Ensure segment is within bounds
-      if (start >= min_lat && end <= max_lat) {
-        valid_segment <- TRUE
-        segments$start[i] <- start
-        segments$end[i] <- end
-      }
-    }
-    
-    # If we couldn't find a valid segment after max attempts, place one at the center
-    if (!valid_segment) {
-      center <- (min_lat + max_lat) / 2
-      size <- min(max_size, lat_span / 10)
-      segments$start[i] <- center - size/2
-      segments$end[i] <- center + size/2
-      warning(paste("Couldn't find valid placement for segment", i, "after", max_attempts, "attempts. Placing at center."))
-    }
-  }
-  
-  return(segments)
-}
-
-# Generate random segments with smooth size distributions along latitude
-#distribution options: uniform normal left_skewed right_skewed lognormal inverse_lognormal
-generate_segments <- function(num_segments, min_size, max_size, latitude_range = c(0, 1000), 
-                              distribution = "uniform") {
-  # Get the range of latitude
-  min_lat <- latitude_range[1]
-  max_lat <- latitude_range[2]
-  lat_span <- max_lat - min_lat
-  
-  # Check if max_size is reasonable for the latitude range
-  if (max_size > lat_span) {
-    warning(paste("max_size (", max_size, ") is larger than the latitude span (", 
-                  lat_span, "). Adjusting to 1/4 of the span."))
-    max_size <- lat_span / 4
-  }
-  
-  # Create data frame to store segment data
-  segments <- data.frame(
-    segment_id = 1:num_segments,
-    start = numeric(num_segments),
-    end = numeric(num_segments)
-  )
-  
   # First, generate all segment sizes at once using a smooth distribution
   positions <- seq(0, 1, length.out = num_segments)
   
@@ -253,7 +142,7 @@ generate_segments <- function(num_segments, min_size, max_size, latitude_range =
 # Measure temperature and exceeded envelopes for each segment
 analyze_temp_exceed <- function(segments, current_gradient, future_gradient = NULL) {
   # Create results data frame
-  results <- data.frame(
+  results_sim <- data.frame(
     segment_id = segments$segment_id,
     size = segments$end - segments$start,
     mean_temp = numeric(nrow(segments)),
@@ -273,21 +162,21 @@ analyze_temp_exceed <- function(segments, current_gradient, future_gradient = NU
     segment_temps <- current_gradient$temperature[segment_indices]
     
     # Calculate statistics
-    results$mean_temp[i] <- mean(segment_temps)
-    results$min_temp[i] <- min(segment_temps)
-    results$max_temp[i] <- max(segment_temps)
+    results_sim$mean_temp[i] <- mean(segment_temps)
+    results_sim$min_temp[i] <- min(segment_temps)
+    results_sim$max_temp[i] <- max(segment_temps)
   }
   
   # If future gradient is provided, calculate additional metrics
   if (!is.null(future_gradient)) {
     # Add future temperature columns
-    results$future_mean_temp <- numeric(nrow(segments))
-    results$future_min_temp <- numeric(nrow(segments))
-    results$future_max_temp <- numeric(nrow(segments))
-    results$temp_increase <- numeric(nrow(segments))
-    results$exceed_max_pct <- numeric(nrow(segments))
-    results$exceed_min_pct <- numeric(nrow(segments))
-    results$exceed_envelope_pct <- numeric(nrow(segments))
+    results_sim$future_mean_temp <- numeric(nrow(segments))
+    results_sim$future_min_temp <- numeric(nrow(segments))
+    results_sim$future_max_temp <- numeric(nrow(segments))
+    results_sim$temp_increase <- numeric(nrow(segments))
+    results_sim$exceed_max_pct <- numeric(nrow(segments))
+    results_sim$exceed_min_pct <- numeric(nrow(segments))
+    results_sim$exceed_envelope_pct <- numeric(nrow(segments))
     
     for (i in 1:nrow(segments)) {
       # Get start and end points
@@ -302,29 +191,29 @@ analyze_temp_exceed <- function(segments, current_gradient, future_gradient = NU
       future_temps <- future_gradient$temperature[segment_indices]
       
       # Calculate statistics
-      results$future_mean_temp[i] <- mean(future_temps)
-      results$future_min_temp[i] <- min(future_temps)
-      results$future_max_temp[i] <- max(future_temps)
+      results_sim$future_mean_temp[i] <- mean(future_temps)
+      results_sim$future_min_temp[i] <- min(future_temps)
+      results_sim$future_max_temp[i] <- max(future_temps)
       
       # Calculate temperature increase
-      results$temp_increase[i] <- results$future_mean_temp[i] - results$mean_temp[i]
+      results_sim$temp_increase[i] <- results_sim$future_mean_temp[i] - results_sim$mean_temp[i]
       
       # Get thermal envelope from current climate
-      max_threshold <- results$max_temp[i]
-      min_threshold <- results$min_temp[i]
+      max_threshold <- results_sim$max_temp[i]
+      min_threshold <- results_sim$min_temp[i]
       
       # Calculate percentage exceeding thermal envelope
       above_max <- sum(future_temps > max_threshold)
       below_min <- sum(future_temps < min_threshold)
       total_points <- length(future_temps)
       
-      results$exceed_max_pct[i] <- (above_max / total_points) * 100
-      results$exceed_min_pct[i] <- (below_min / total_points) * 100
-      results$exceed_envelope_pct[i] <- ((above_max + below_min) / total_points) * 100
+      results_sim$exceed_max_pct[i] <- (above_max / total_points) * 100
+      results_sim$exceed_min_pct[i] <- (below_min / total_points) * 100
+      results_sim$exceed_envelope_pct[i] <- ((above_max + below_min) / total_points) * 100
     }
   }
   
-  return(results)
+  return(results_sim)
 }
 
 
@@ -335,7 +224,7 @@ set.seed(123)
 today_temp <- temperature_gradient(max_temp=30, min_temp=0,latitude_range = c(0, 1000))
 future_temp <- temperature_gradient(max_temp=33, min_temp=3,latitude_range = c(0, 1000))
 segments <- generate_segments(1000,1,1000,latitude_range = c(0, 1000),distribution = "lognormal")
-results <- analyze_temp_exceed(segments,today_temp,future_temp)
+results_sim <- analyze_temp_exceed(segments,today_temp,future_temp)
 
 
 
@@ -355,60 +244,47 @@ plot1 <- ggplot(combined_temp, aes(x = display_latitude, y = temperature, color 
   labs(x = "Latitude", 
        y = "Temperature (°C)",
        color = "Scenario")+
-  scale_x_continuous(breaks = seq(-50, 50, by = 50)) 
+  scale_x_continuous(breaks = seq(-50, 50, by = 50)) +
+  theme(legend.position = c(0.5, 0.1),  # x,y coordinates (0.5 is center, 0.1 is near bottom)
+        legend.justification = c(0.5, 0), # anchor point for the legend
+        legend.background = element_rect(fill = "white", color = NA, linewidth = 0.5),
+        legend.margin = margin(6, 6, 6, 6))
   #theme(axis.text.x=element_blank(),axis.ticks.x=element_blank())
 
-results$pct_domain <- results$size / 1000
+results_sim$pct_domain <- results_sim$size / 1000
 
 # plot range size vs temperature change
-plot2 <- ggplot(results, aes(x = pct_domain*100, y = temp_increase)) +
+plot2 <- ggplot(results_sim, aes(x = pct_domain*100, y = temp_increase)) +
   geom_pointdensity(position = position_jitter(width = 0.01, height = 0.05),size=0.01)+
-  #geom_hex()+
   scale_color_gradient(low='#e9f6fd',high="#2171b5") + 
-  #geom_smooth(method = "loess", color = "black") +
   theme_classic() +
-  labs(x = "Latitudinal range size (degrees)", 
-       y = "Mean temperature \nincrease (°C)")+
+  labs(x = "Range size as\nproportion of domain", 
+       y = "Temperature \nexposure (°C)")+
   scale_x_continuous(limits = c(0, 100),
+                     expand=c(0,0),
                      breaks = seq(0, 100, 20))+
-  scale_y_continuous(limits=c(0,5))+
+  scale_y_continuous(limits=c(0,5),
+                     expand=c(0,0),)+
   theme(legend.position="none")
 
-results <- results %>%
+results_sim <- results_sim %>%
   arrange(pct_domain) %>%
   mutate(cum_species_pct = (row_number() / n()) * 100)
 
-# plot range size vs habitat loss
-plot3 <- ggplot(results, aes(x = pct_domain*100, y = exceed_max_pct)) +
-  geom_pointdensity()+
-  #geom_hex(bins=50)+
-  scale_color_gradient(low='#e9f6fd',high="#2171b5",trans="log10") + #scale_color for point, scale_fill for hex
-  geom_smooth(method = "loess", span = 0.3,color = "black",se=F) +
-  # Add the cumulative species line
-  geom_line(aes(y = cum_species_pct * max(exceed_max_pct) / 100), 
-            color = "blue", linewidth = 1) +
-  scale_y_continuous(
-    name = "Habitat loss \n(% above today's max temp)",
-    sec.axis = sec_axis(~. * 100 / max(results$exceed_max_pct), 
-                        name = "Cumulative species (%)")
-  ) +
-  theme_classic() +
-  labs(x = "Latitudinal range size (degrees)", 
-       y = "Habitat loss \n(% above today's max temp)")+
-  scale_x_continuous(limits = c(0, 100),
-                     breaks = seq(0, 100, 20))+
-  theme(legend.position="none")
+
 
 #plot range size distribution
-plot4 <- ggplot(results,aes(x=pct_domain*100))+
+plot4 <- ggplot(results_sim,aes(x=pct_domain*100))+
   geom_histogram(fill = "lightgray", color = "black")+
   theme_classic()+
-  labs(x = "Latitudinal range size (degrees)", 
-       y = "Frequency of species")+
+  labs(x = "Range size as\nproportion of domain", 
+       y = "Frequency \nof species")+
   scale_x_continuous(limits = c(-5, 100),
-                     breaks = seq(0, 100, 20))
+                     breaks = seq(0, 100, 20),
+                     expand=c(0,0))+
+  scale_y_continuous(limits=c(0,300),
+                     expand=c(0,0))
 
-plot_grid(plot1, plot2,plot3,plot4, labels = c("A", "B","C","D"), ncol = 4)
 
 
 
@@ -539,10 +415,8 @@ find_critical_range_size <- function(displacement_data, segments_data) {
   # Keep original segment sizes
   segments_display$size <- segments_display$end - segments_display$start
   
-  # Calculate center point for each segment
+  # Keep original calculations for backward compatibility
   segments_display$center_lat <- (segments_display$start + segments_display$end) / 2
-  
-  # Calculate 1/4 and 3/4 points
   segments_display$quarter_lat <- (segments_display$start + segments_display$center_lat) / 2
   segments_display$three_quarter_lat <- (segments_display$center_lat + segments_display$end) / 2
   
@@ -550,41 +424,124 @@ find_critical_range_size <- function(displacement_data, segments_data) {
   segments_display$required_displacement <- numeric(nrow(segments_display))
   segments_display$min_required_displacement <- numeric(nrow(segments_display))
   segments_display$no_analog <- logical(nrow(segments_display))
+  segments_display$points_sampled <- numeric(nrow(segments_display))
+  segments_display$points_with_analog_anywhere <- numeric(nrow(segments_display))
+  segments_display$points_with_analog_in_range <- numeric(nrow(segments_display))
+  segments_display$no_analog_within_range_pct <- numeric(nrow(segments_display))
   
   for (i in 1:nrow(segments_display)) {
-    # Get all five points for this segment
-    points <- c(
-      segments_display$start[i],
-      segments_display$quarter_lat[i],
-      segments_display$center_lat[i],
-      segments_display$three_quarter_lat[i],
-      segments_display$end[i]
-    )
+    # Find all data points within this segment instead of just 5 fixed points
+    segment_indices <- which(displacement_data$latitude >= segments_display$start[i] & 
+                               displacement_data$latitude <= segments_display$end[i])
+    
+    # If no points found in this range, fall back to the original 5-point method
+    if (length(segment_indices) == 0) {
+      points <- c(
+        segments_display$start[i],
+        segments_display$quarter_lat[i],
+        segments_display$center_lat[i],
+        segments_display$three_quarter_lat[i],
+        segments_display$end[i]
+      )
+    } else {
+      # Use all data points within the segment
+      points <- displacement_data$latitude[segment_indices]
+    }
+    
+    # Record how many points we're sampling
+    segments_display$points_sampled[i] <- length(points)
     
     # Store displacements for each point
     displacements <- numeric(length(points))
     has_analog <- logical(length(points))
+    within_range <- logical(length(points))
     
     # Find displacement for each point
     for (j in 1:length(points)) {
       point <- points[j]
-      closest_idx <- which.min(abs(displacement_data$latitude - point))
       
-      # Check if displacement is NA
-      if (is.na(displacement_data$displacement[closest_idx])) {
-        displacements[j] <- NA
-        has_analog[j] <- FALSE
+      # Find the two closest points in displacement_data for interpolation
+      dists <- abs(displacement_data$latitude - point)
+      closest_idx <- which.min(dists)
+      
+      # If we're exactly at a data point, just use that value
+      if (dists[closest_idx] < 1e-10) {
+        if (is.na(displacement_data$displacement[closest_idx])) {
+          displacements[j] <- NA
+          has_analog[j] <- FALSE
+          within_range[j] <- FALSE
+        } else {
+          displacements[j] <- displacement_data$displacement[closest_idx]
+          has_analog[j] <- TRUE
+          
+          # Check if analog is within range
+          future_lat <- point + displacements[j]
+          within_range[j] <- (future_lat >= segments_display$start[i] && 
+                                future_lat <= segments_display$end[i])
+        }
       } else {
-        displacements[j] <- abs(displacement_data$displacement[closest_idx])
-        has_analog[j] <- TRUE
+        # Get the two points surrounding our target for interpolation
+        left_idx <- max(which(displacement_data$latitude <= point), na.rm = TRUE)
+        right_idx <- min(which(displacement_data$latitude >= point), na.rm = TRUE)
+        
+        # Handle edge cases
+        if (length(left_idx) == 0) left_idx <- right_idx
+        if (length(right_idx) == 0) right_idx <- left_idx
+        
+        # Check for NA values
+        if (is.na(displacement_data$displacement[left_idx]) || 
+            is.na(displacement_data$displacement[right_idx])) {
+          displacements[j] <- NA
+          has_analog[j] <- FALSE
+          within_range[j] <- FALSE
+        } else {
+          # Interpolate
+          left_lat <- displacement_data$latitude[left_idx]
+          right_lat <- displacement_data$latitude[right_idx]
+          left_disp <- displacement_data$displacement[left_idx]
+          right_disp <- displacement_data$displacement[right_idx]
+          
+          # If same point, just use that value
+          if (left_idx == right_idx) {
+            displacements[j] <- left_disp
+          } else {
+            # Linear interpolation
+            weight <- (point - left_lat) / (right_lat - left_lat)
+            displacements[j] <- left_disp + weight * (right_disp - left_disp)
+          }
+          has_analog[j] <- TRUE
+          
+          # Check if analog is within range
+          future_lat <- point + displacements[j]
+          within_range[j] <- (future_lat >= segments_display$start[i] && 
+                                future_lat <= segments_display$end[i])
+        }
       }
     }
     
-    # Store the center point displacement for reference (original behavior)
-    segments_display$required_displacement[i] <- displacements[3]  # Center point
+    # Store center point displacement (for backward compatibility)
+    center_idx <- which.min(abs(points - segments_display$center_lat[i]))
+    if (length(center_idx) > 0) {
+      segments_display$required_displacement[i] <- abs(displacements[center_idx])
+    } else {
+      segments_display$required_displacement[i] <- NA
+    }
+    
+    # Count points with analogs
+    segments_display$points_with_analog_anywhere[i] <- sum(has_analog)
+    segments_display$points_with_analog_in_range[i] <- sum(within_range)
+    
+    # Calculate percentage of points with no analog within range
+    if (segments_display$points_sampled[i] > 0) {
+      segments_display$no_analog_within_range_pct[i] <- 100 - 
+        (segments_display$points_with_analog_in_range[i] / 
+           segments_display$points_sampled[i] * 100)
+    } else {
+      segments_display$no_analog_within_range_pct[i] <- 100  # Default to 100% if no points
+    }
     
     # Find the minimum displacement among points that have analogs
-    valid_displacements <- displacements[has_analog]
+    valid_displacements <- abs(displacements[has_analog])
     if (length(valid_displacements) > 0) {
       segments_display$min_required_displacement[i] <- min(valid_displacements, na.rm=TRUE)
       segments_display$no_analog[i] <- FALSE
@@ -594,25 +551,110 @@ find_critical_range_size <- function(displacement_data, segments_data) {
     }
   }
   
-  # Determine if the segment will completely lose habitat using the minimum displacement
-  # If min displacement is less than segment size, at least some portion can adapt
-  segments_display$complete_habitat_loss <- segments_display$size < segments_display$min_required_displacement
+  # Two criteria for complete habitat loss:
+  # 1. Traditional: Minimum displacement exceeds segment size
+  segments_display$complete_habitat_loss_traditional <- 
+    segments_display$size <= segments_display$min_required_displacement
   
-  # Areas with no analog should be marked as complete habitat loss
+  # 2. New approach: 100% of points have no analog within range
+  segments_display$complete_habitat_loss_new <- 
+    segments_display$no_analog_within_range_pct >= 100
+  
+  # Combined approach (they should generally agree)
+  segments_display$complete_habitat_loss <- 
+    segments_display$complete_habitat_loss_traditional | 
+    segments_display$complete_habitat_loss_new
+  
+  # Areas with no analog anywhere should be marked as complete habitat loss
   segments_display$complete_habitat_loss[segments_display$no_analog] <- TRUE
   
-  # Convert to display units at the end - changed from -90/90 to -50/50
+  # Existing display calculations
   segments_display$display_start <- ((segments_display$start - 0) / lat_range) * 100 - 50
   segments_display$display_end <- ((segments_display$end - 0) / lat_range) * 100 - 50
   segments_display$display_size <- segments_display$display_end - segments_display$display_start
   segments_display$display_center_lat <- ((segments_display$center_lat - 0) / lat_range) * 100 - 50
   
-  # Scale displacement to display units - changed scale factor from 180 to 100
   scale_factor <- 100 / lat_range
   segments_display$display_displacement <- segments_display$required_displacement * scale_factor
   segments_display$display_min_displacement <- segments_display$min_required_displacement * scale_factor
   
   return(segments_display)
+} 
+
+calculate_min_range_size <- function(today_temp, future_temp, tolerance = 0.01) {
+  # Find middle latitude (equator)
+  min_lat <- min(today_temp$latitude)
+  max_lat <- max(today_temp$latitude)
+  middle_lat <- (min_lat + max_lat) / 2
+  
+  # Create results dataframe
+  results <- data.frame(
+    latitude = today_temp$latitude,
+    temp_today = today_temp$temperature,
+    distance_to_analog = NA,
+    min_range_size = NA
+  )
+  
+  # For each latitude in today's climate
+  for (i in 1:nrow(results)) {
+    current_lat <- results$latitude[i]
+    current_temp <- results$temp_today[i]
+    
+    # Find all future latitudes with temperatures close to current temperature
+    temp_diff <- abs(future_temp$temperature - current_temp)
+    min_diff <- min(temp_diff)
+    future_analog_indices <- which(abs(temp_diff - min_diff) < tolerance)
+    future_analog_lats <- future_temp$latitude[future_analog_indices]
+    
+    # Determine which hemisphere we're in
+    is_north_of_equator <- current_lat > middle_lat
+    
+    # Choose appropriate analog based on hemisphere
+    if (is_north_of_equator) {
+      # North of equator - prefer analogs north of equator but further south than current
+      valid_analogs <- future_analog_lats[future_analog_lats <= current_lat & 
+                                            future_analog_lats >= middle_lat]
+      # If no valid analogs found, look for analogs further north
+      if (length(valid_analogs) == 0) {
+        valid_analogs <- future_analog_lats[future_analog_lats > current_lat]
+      }
+      # If still no valid analogs, consider all analogs
+      if (length(valid_analogs) == 0) {
+        valid_analogs <- future_analog_lats
+      }
+    } else {
+      # South of equator - prefer analogs south of equator but further north than current
+      valid_analogs <- future_analog_lats[future_analog_lats >= current_lat & 
+                                            future_analog_lats <= middle_lat]
+      # If no valid analogs found, look for analogs further south
+      if (length(valid_analogs) == 0) {
+        valid_analogs <- future_analog_lats[future_analog_lats < current_lat]
+      }
+      # If still no valid analogs, consider all analogs
+      if (length(valid_analogs) == 0) {
+        valid_analogs <- future_analog_lats
+      }
+    }
+    
+    # Calculate distances to future analogs
+    distances <- abs(valid_analogs - current_lat)
+    min_distance <- min(distances)
+    results$distance_to_analog[i] <- min_distance
+    
+    # Calculate relative position on gradient (0 at equator, -1 at min lat, +1 at max lat)
+    rel_position <- (current_lat - middle_lat) / (max_lat - middle_lat) * 2
+    
+    # Apply symmetrical scaling factor based on distance from equator
+    # Use absolute value of rel_position to ensure symmetry
+    factor <- 2 - abs(rel_position)
+    factor <- max(factor, 1.0)
+    
+    # Calculate minimum range size with adjusted factor
+    min_range_size <- factor * min_distance
+    results$min_range_size[i] <- min_range_size
+  }
+  
+  return(results)
 }
 
 
@@ -628,9 +670,13 @@ analyzed_segments <- find_critical_range_size(displacement, segments)
 percent_loss <- sum(analyzed_segments$complete_habitat_loss) / nrow(analyzed_segments) * 100
 analyzed_segments$pct_domain <- analyzed_segments$size / 1000
 
-combined_segment_results <- merge(results, analyzed_segments, by = "segment_id", all.x = TRUE)
+combined_segment_results <- merge(results_sim, analyzed_segments, by = "segment_id", all.x = TRUE)
 
 segments_lost <- subset(analyzed_segments, complete_habitat_loss == TRUE)
+
+min_range <- calculate_min_range_size(today_temp1, future_temp1)
+min_range$display_latitude <- -50 + 100 * (min_range$latitude  - 0) / 1000
+min_range$display_range <- (min_range$min_range_size - 0) / 1000 * 100
 
 # Calculate statistics about these segments
 critical_stats <- data.frame(
@@ -679,42 +725,121 @@ plot_critical <- ggplot() +
 
 #plot3 with critical range size shading
 min_critical_range <- min(displacement$display_displacement, na.rm = TRUE)
-max_critical_range <- max(displacement$display_displacement, na.rm = TRUE)
+max_critical_range <- max(min_range$display_range, na.rm = TRUE)
 
-plot3_crit <- plot3 +  annotate("rect", 
-                                xmin = min_critical_range, 
-                                xmax = max_critical_range, 
-                                ymin = -Inf, 
-                                ymax = Inf, 
-                                fill = "red", 
-                                alpha = 0.2) 
+# plot range size vs habitat loss
+plot3 <- ggplot(results_sim, aes(x = pct_domain*100, y = exceed_max_pct)) +
+  annotate("rect", 
+              xmin = min_critical_range, 
+              xmax = max_critical_range, 
+              ymin = -Inf, 
+              ymax = Inf, 
+              fill = "red", 
+              alpha = 0.1) +
+  annotate("rect", 
+           xmin = 0, 
+           xmax = min_critical_range, 
+           ymin = -Inf, 
+           ymax = Inf, 
+           fill = "red", 
+           alpha = 0.3) +
+  geom_pointdensity(size=0.8)+
+  scale_color_gradient(low='#cbecff',high="#2171b5",trans="log10") + #scale_color for point, scale_fill for hex
+  geom_smooth(method = "loess", span = 0.3,color = "black",se=F) +
+  # Add the cumulative species line
+  geom_line(aes(x = pct_domain*100,y = cum_species_pct * max(exceed_max_pct) / 100),
+            color = "blue", linewidth = 1) +
+  scale_y_continuous(
+    name = "Area exceeding\n envelope (%)",
+    sec.axis = sec_axis(~. * 100 / max(results_sim$exceed_max_pct), 
+                        name = "Cumulative species (%)",breaks = seq(0, 100, 20)),
+    limits = c(0, 100.5),
+    breaks = seq(0, 100, 20),
+    expand=c(0,0)) +
+  theme_classic() +
+  labs(x = "Range size as\nproportion of domain", 
+       y = "Area exceeding envelope (%)")+
+  scale_x_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 20),
+                     expand=c(0,0))+
+  theme(legend.position="none",
+        axis.title.y.right = element_text(color = "blue"),
+        axis.text.y.right = element_text(color = "blue"),
+        axis.line.y.right = element_line(color="blue"))
 
+plot3_nored <- ggplot(results_sim, aes(x = pct_domain*100, y = exceed_max_pct)) +
+  geom_pointdensity(size=0.8)+
+  scale_color_gradient(low='#cbecff',high="#2171b5",trans="log10") + #scale_color for point, scale_fill for hex
+  geom_smooth(method = "loess", span = 0.3,color = "black",se=F) +
+  # Add the cumulative species line
+  geom_line(aes(x = pct_domain*100,y = cum_species_pct * max(exceed_max_pct) / 100),
+            color = "blue", linewidth = 1) +
+  scale_y_continuous(
+    name = "Area exceeding\n envelope (%)",
+    sec.axis = sec_axis(~. * 100 / max(results_sim$exceed_max_pct), 
+                        name = "Cumulative species (%)",breaks = seq(0, 100, 20)),
+    limits = c(0, 100.5),
+    breaks = seq(0, 100, 20),
+    expand=c(0,0)) +
+  theme_classic() +
+  labs(x = "Latitudinal range \nsize (degrees)", 
+       y = "Area exceeding envelope (%)")+
+  scale_x_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 20),
+                     expand=c(0,0))+
+  theme(legend.position="none",
+        axis.title.y.right = element_text(color = "blue"),
+        axis.text.y.right = element_text(color = "blue"),
+        axis.line.y.right = element_line(color="blue"))
 
 # Plot showing habitat loss by latitude
 # Calculate percentage of segments at risk
-future_temp6 <- temperature_gradient(max_temp=36, min_temp=6,latitude_range = c(0, 1000))
-displacement6 <- calculate_latitudinal_displacement(today_temp, future_temp6)
-future_temp9 <- temperature_gradient(max_temp=39, min_temp=9,latitude_range = c(0, 1000))
-displacement9 <- calculate_latitudinal_displacement(today_temp, future_temp9)
 
 plot_by_latitude <- ggplot(analyzed_segments, aes(x = display_center_lat, y = display_size)) +
+  annotate("rect", 
+           xmin = -Inf, 
+           xmax = Inf, 
+           ymin = min_critical_range, 
+           ymax = max_critical_range, 
+           fill = "red", 
+           alpha = 0.1) +
+  annotate("rect", 
+           xmin = -Inf, 
+           xmax = Inf, 
+           ymin = 0, 
+           ymax = min_critical_range, 
+           fill = "red", 
+           alpha = 0.3) +
   # Regular points
-  geom_point(aes(color = complete_habitat_loss), size = 0.5,alpha = 0.5) +
+  geom_point(aes(color = complete_habitat_loss), size = 0.5,alpha = 0.3) +
   # No analog points 
   geom_point(data = subset(analyzed_segments, no_analog), 
              aes(x = display_center_lat, y = display_size),
-             color = "red", size = 0.5, alpha = 0.5) +
-  # required latitudinal shift
+             color = "red", size = 0.5, alpha = 0.3) +
+  # distance to analog
   geom_line(data = displacement, aes(x = display_latitude, y = abs(display_displacement)), 
             color = "black", size = 1.5) +
-  geom_line(data = displacement6, aes(x = display_latitude, y = abs(display_displacement)), 
-            color = "darkgrey", size = 1.5) +
-  geom_line(data = displacement9, aes(x = display_latitude, y = abs(display_displacement)), 
-            color = "lightgrey", size = 1.5) +
-  scale_color_manual(values = c("blue", "red"), name = "Complete \nhabitat loss") +
+  #minimum range size
+  geom_line(data = min_range, 
+            aes(x = display_latitude, y = display_range),
+            color = "black", linetype = "dashed", size = 1.2) +
+  scale_color_manual(values = c("blue", "red"), name = "Complete \nhabitat loss",
+                     guide = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+  scale_x_continuous(expand=c(0,0))+
+  scale_y_continuous(expand=c(0,0),breaks=(seq(0, 100, 20)))+
   theme_classic() +
   labs(x = "Latitude", 
-       y = "Range size \n(degrees latitude)") 
+       y = "Range size \n(degrees latitude)") +
+  theme(
+    #legend.position="bottom",
+    legend.position = c(0.98, 0.98),  # x and y coordinates (0-1 scale)
+    legend.justification = c(1, 1),   # Anchor point at top right of legend box
+    legend.background = element_rect(fill = "white", color = NA, linewidth = 0.5, linetype = "solid"),
+    legend.margin = margin(3, 3, 3, 3),
+    legend.spacing.y = unit(0.1, "cm"),
+    legend.key.size = unit(0.6, "cm"),
+    legend.title = element_text(size = 9), 
+    legend.text = element_text(size = 9))
 
 
 # Create habitat vulnerability plot with threshold line
@@ -742,55 +867,14 @@ habitat_vulnerability_plot <- ggplot(combined_segment_results, aes(x = pct_domai
 
 
 
-# bar chart: proportion of species in critical range size
-percent_loss <- sum(analyzed_segments$complete_habitat_loss, na.rm = TRUE) / nrow(analyzed_segments) * 100
 
-points_under_line <- function(data, displacement_data) {
-  count <- 0
-  # Only count rows that have complete data (no NAs)
-  complete_data <- data[complete.cases(data$display_center_lat, data$display_size), ]
-  total <- nrow(complete_data)
-  
-  for(i in 1:total) {
-    # Find the closest latitude in displacement data
-    lat <- complete_data$display_center_lat[i]
-    closest_idx <- which.min(abs(displacement_data$display_latitude - lat))
-    
-    # Make sure we have valid threshold value
-    if(length(closest_idx) > 0 && !is.na(displacement_data$display_displacement[closest_idx])) {
-      threshold <- displacement_data$display_displacement[closest_idx]
-      
-      # Check if point is under the line
-      if(!is.na(complete_data$display_size[i]) && !is.na(threshold) && 
-         complete_data$display_size[i] < abs(threshold)) {
-        count <- count + 1
-      }
-    }
-  }
-  
-  return(count/total * 100)
-}
-pct_under_line1 <- points_under_line(analyzed_segments, displacement)
-pct_under_line2 <- points_under_line(analyzed_segments, displacement6)
-pct_under_line3 <- points_under_line(analyzed_segments, displacement9)
 
-# Create a data frame for plotting
-bar_data <- data.frame(
-  Line = c("3C", "6C", "9C"),
-  Percentage = c(pct_under_line1, pct_under_line2, pct_under_line3)
-)
 
-# Create bar chart
-barE <- ggplot(bar_data, aes(x = Line, y = Percentage)) +
-  geom_bar(stat = "identity", fill = c("black", "darkgrey", "lightgrey")) +
-  theme_classic() +
-  labs(x = "Displacement line", 
-       y = "Critical range sizes (%)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
-  scale_y_continuous(limits=c(0,100))
+fig2 <- plot_grid(plot1, plot4,plot2,plot3,plot_by_latitude,displace_loss,
+          labels = c("A","B","C","D","E","F"), ncol = 3,nrow=2, align="hv")
+ggsave(paste0(figures_folder, "fig2.png"), fig2, 
+       width = 11, height = 6, dpi = 350)
 
-plot_grid(plot1, plot2,plot3_crit,plot4,plot_by_latitude,barE,
-          labels = c("A", "B","C","D","E","F"), ncol = 2,nrow=3)
 
 
 
@@ -809,895 +893,5 @@ plot_grid(plot1, plot2,plot3_crit,plot4,plot_by_latitude,barE,
 
 
 
-
-
-
-
-### Functions for 2d version
-
-# Create the temperature gradient 
-create_temperature_gradient <- function(grid_size, max_temp, min_temp) {
-  # Create a SpatRaster with the specified dimensions
-  r <- rast(ncol=grid_size, nrow=grid_size, xmin=0, xmax=grid_size, ymin=0, ymax=grid_size)
-  
-  # Create x and y coordinates for the entire grid
-  xy <- crds(r)
-  y <- xy[,2]
-  
-  # Calculate the middle y-coordinate (equator)
-  middle_y <- grid_size/2
-  
-  # Calculate distance from equator for each cell (only considering y-axis)
-  dist_from_equator <- abs(y - middle_y)
-  
-  # Maximum distance possible from equator to edge
-  max_dist_from_equator <- grid_size/2
-  
-  # Normalize distance (0 at middle, 1 at extremes)
-  normalized_dist <- dist_from_equator / max_dist_from_equator
-  
-  # Using the same quadratic function as temperature_gradient
-  # that equals 1 at x=0 and 0 at x=1
-  temp_factor <- 1 - normalized_dist^2
-  
-  # Calculate temperature (max_temp along equator, min_temp at top/bottom edges)
-  temp <- min_temp + (max_temp - min_temp) * temp_factor
-  
-  # Assign values to the raster
-  values(r) <- temp
-  
-  return(r)
-}
-
-# Generate random polygons of different sizes
-generate_polygons <- function(num_polygons, grid_size, min_size, max_size = grid_size * 0.9) {
-  # Create lists to store polygon data
-  all_polygons <- list()
-  ids <- numeric(num_polygons)
-  
-  # Center longitude for all polygons
-  center_x <- grid_size / 2
-  
-  # Distribute polygons across size categories
-  num_very_small <- floor(num_polygons * 0.3)  # 30% are very small (<5%)
-  num_small <- floor(num_polygons * 0.25)      # 25% are small (5-20%)
-  num_medium <- floor(num_polygons * 0.2)     # 15% are medium (20-50%)
-  num_large <- num_polygons - num_very_small - num_small - num_medium  # 10% are large (50-90%)
-  
-  polygon_count <- 0
-  
-  # 1. Generate very small polygons (0-5% of domain)
-  for (i in 1:num_very_small) {
-    polygon_count <- polygon_count + 1
-    
-    # Size between min_size and 5% of domain
-    max_radius <- grid_size * 0.025  # 5% diameter = 2.5% radius
-    radius <- min_size + runif(1) * (max_radius - min_size)
-    
-    # Random latitude within safe bounds
-    min_y <- radius * 1.2
-    max_y <- grid_size - (radius * 1.2)
-    center_y <- runif(1, min_y, max_y)
-    
-    # Generate polygon
-    num_vertices <- sample(5:8, 1)
-    angles <- sort(runif(num_vertices, 0, 2*pi))
-    radii <- radius * runif(num_vertices, 0.7, 1.0)
-    
-    x_coords <- center_x + radii * cos(angles)
-    y_coords <- center_y + radii * sin(angles)
-    
-    # Close polygon
-    x_coords <- c(x_coords, x_coords[1])
-    y_coords <- c(y_coords, y_coords[1])
-    
-    coords <- cbind(x_coords, y_coords)
-    all_polygons[[polygon_count]] <- list(coords)
-    ids[polygon_count] <- polygon_count
-  }
-  
-  # 2. Generate small polygons (5-20% of domain)
-  for (i in 1:num_small) {
-    polygon_count <- polygon_count + 1
-    
-    # Size between 5% and 20% of domain
-    min_radius <- grid_size * 0.025  # 5% diameter = 2.5% radius
-    max_radius <- grid_size * 0.1    # 20% diameter = 10% radius
-    radius <- min_radius + runif(1) * (max_radius - min_radius)
-    
-    # Random latitude within safe bounds
-    min_y <- radius * 1.2
-    max_y <- grid_size - (radius * 1.2)
-    
-    # Skip if invalid bounds
-    if (min_y >= max_y) {
-      radius <- (max_y - 10) / 1.2
-    }
-    
-    center_y <- runif(1, min_y, max_y)
-    
-    # Generate polygon
-    num_vertices <- sample(6:10, 1)
-    angles <- sort(runif(num_vertices, 0, 2*pi))
-    radii <- radius * runif(num_vertices, 0.7, 1.0)
-    
-    x_coords <- center_x + radii * cos(angles)
-    y_coords <- center_y + radii * sin(angles)
-    
-    # Close polygon
-    x_coords <- c(x_coords, x_coords[1])
-    y_coords <- c(y_coords, y_coords[1])
-    
-    coords <- cbind(x_coords, y_coords)
-    all_polygons[[polygon_count]] <- list(coords)
-    ids[polygon_count] <- polygon_count
-  }
-  
-  # 3. Generate medium polygons (20-50% of domain)
-  for (i in 1:num_medium) {
-    polygon_count <- polygon_count + 1
-    
-    # Size between 20% and 50% of domain
-    min_radius <- grid_size * 0.1    # 20% diameter = 10% radius
-    max_radius <- grid_size * 0.25   # 50% diameter = 25% radius
-    radius <- min_radius + runif(1) * (max_radius - min_radius)
-    
-    # More restricted placement for medium polygons
-    max_offset <- (grid_size / 2) - radius
-    
-    # If radius too large, adjust
-    if (max_offset < 0) {
-      radius <- (grid_size / 2) * 0.9
-      max_offset <- (grid_size / 2) - radius
-    }
-    
-    # Center near middle of grid
-    center_y <- (grid_size / 2) + runif(1, -max_offset, max_offset)
-    
-    # Generate polygon
-    num_vertices <- sample(8:12, 1)
-    angles <- sort(runif(num_vertices, 0, 2*pi))
-    radii <- radius * runif(num_vertices, 0.8, 1.0)
-    
-    x_coords <- center_x + radii * cos(angles)
-    y_coords <- center_y + radii * sin(angles)
-    
-    # Close polygon
-    x_coords <- c(x_coords, x_coords[1])
-    y_coords <- c(y_coords, y_coords[1])
-    
-    # Clip to grid if needed
-    x_coords <- pmin(pmax(x_coords, 0), grid_size)
-    y_coords <- pmin(pmax(y_coords, 0), grid_size)
-    
-    coords <- cbind(x_coords, y_coords)
-    all_polygons[[polygon_count]] <- list(coords)
-    ids[polygon_count] <- polygon_count
-  }
-  
-  # 4. Generate large polygons (50-90% of domain)
-  for (i in 1:num_large) {
-    polygon_count <- polygon_count + 1
-    
-    # Size between 50% and 90% of domain
-    # Spread them out evenly across this range
-    size_pct <- 0.5 + (0.4 * i / num_large)
-    radius <- (grid_size / 2) * size_pct
-    
-    # Large polygons must be very close to center
-    max_offset <- max(0, (grid_size / 2) - radius)
-    center_y <- (grid_size / 2) + runif(1, -max_offset, max_offset)
-    
-    # More vertices for smoother large polygons
-    num_vertices <- 16
-    angles <- sort(runif(num_vertices, 0, 2*pi))
-    
-    # Less variation for large polygons
-    variation <- 0.95
-    radii <- radius * runif(num_vertices, variation, 1.0)
-    
-    x_coords <- center_x + radii * cos(angles)
-    y_coords <- center_y + radii * sin(angles)
-    
-    # Close polygon
-    x_coords <- c(x_coords, x_coords[1])
-    y_coords <- c(y_coords, y_coords[1])
-    
-    # Clip to grid boundaries
-    x_coords <- pmin(pmax(x_coords, 0), grid_size)
-    y_coords <- pmin(pmax(y_coords, 0), grid_size)
-    
-    coords <- cbind(x_coords, y_coords)
-    all_polygons[[polygon_count]] <- list(coords)
-    ids[polygon_count] <- polygon_count
-  }
-  
-  # Create SpatVector with all polygons
-  polygons <- vect(all_polygons, type="polygons", crs="")
-  polygons$id <- ids
-  
-  return(polygons)
-}
-
-# Measure temperature for each polygon
-measure_polygon_temperatures <- function(polygons, temp_raster) {
-  # Extract values from raster for each polygon
-  poly_temps <- extract(temp_raster, polygons)
-  
-  # Initialize results dataframe
-  results <- data.frame(
-    polygon_id = 1:length(polygons),
-    area = expanse(polygons),
-    mean_temp = NA,
-    min_temp = NA,
-    max_temp = NA,
-    num_cells = NA
-  )
-  
-  # Aggregate statistics by polygon ID
-  poly_stats <- aggregate(poly_temps[, 2], by=list(ID=poly_temps$ID), 
-                          FUN=function(x) c(mean=mean(x), min=min(x), max=max(x), count=length(x)))
-  
-  # Fill in results
-  for (i in 1:nrow(poly_stats)) {
-    id <- poly_stats[i, "ID"]
-    stats <- poly_stats[i, "x"]
-    
-    results$mean_temp[id] <- stats[1]  # mean
-    results$min_temp[id] <- stats[2]   # min
-    results$max_temp[id] <- stats[3]   # max
-    results$num_cells[id] <- stats[4]  # count
-  }
-  
-  return(results)
-}
-
-# Measure temperature and exceeded envelopes for each polygon
-measure_advanced_temperature <- function(polygons, current_raster, future_raster = NULL) {
-  # Extract values from current raster for each polygon
-  poly_temps_current <- extract(current_raster, polygons)
-  
-  # Initialize results dataframe
-  results <- data.frame(
-    polygon_id = 1:length(polygons),
-    area = expanse(polygons),
-    mean_temp = NA,
-    min_temp = NA,
-    max_temp = NA,
-    num_cells = NA
-  )
-  
-  # Aggregate statistics by polygon ID for current temperatures
-  poly_stats <- aggregate(poly_temps_current[, 2], by=list(ID=poly_temps_current$ID), 
-                          FUN=function(x) c(mean=mean(x), min=min(x), max=max(x), count=length(x)))
-  
-  # Fill in current temperature results
-  for (i in 1:nrow(poly_stats)) {
-    id <- poly_stats[i, "ID"]
-    stats <- poly_stats[i, "x"]
-    
-    results$mean_temp[id] <- stats[1]  # mean
-    results$min_temp[id] <- stats[2]   # min
-    results$max_temp[id] <- stats[3]   # max
-    results$num_cells[id] <- stats[4]  # count
-  }
-  
-  # If future raster is provided, calculate additional metrics
-  if (!is.null(future_raster)) {
-    # Extract values from future raster for each polygon
-    poly_temps_future <- extract(future_raster, polygons)
-    
-    # Add future temperature columns
-    results$future_mean_temp <- NA
-    results$future_min_temp <- NA
-    results$future_max_temp <- NA
-    results$temp_increase <- NA
-    results$exceed_max_pct <- NA
-    
-    # Aggregate statistics for future temperatures
-    future_poly_stats <- aggregate(poly_temps_future[, 2], by=list(ID=poly_temps_future$ID), 
-                                   FUN=function(x) c(mean=mean(x), min=min(x), max=max(x)))
-    
-    # Fill in future temperature results
-    for (i in 1:nrow(future_poly_stats)) {
-      id <- future_poly_stats[i, "ID"]
-      stats <- future_poly_stats[i, "x"]
-      
-      results$future_mean_temp[id] <- stats[1]  # mean
-      results$future_min_temp[id] <- stats[2]   # min
-      results$future_max_temp[id] <- stats[3]   # max
-      
-      # Calculate temperature increase
-      results$temp_increase[id] <- results$future_mean_temp[id] - results$mean_temp[id]
-    }
-    
-    # Calculate area exceeding maximum envelope for each polygon
-    for (i in 1:length(polygons)) {
-      # Check if the polygon has valid temperature data
-      if (is.na(results$max_temp[i])) {
-        results$exceed_max_pct[i] <- NA
-        next
-      }
-      
-      # Get current and future temperatures for this polygon
-      poly_current <- poly_temps_current[poly_temps_current$ID == i, 2]
-      poly_future <- poly_temps_future[poly_temps_future$ID == i, 2]
-      
-      # Ensure we have matching cells
-      if (length(poly_current) != length(poly_future)) {
-        warning(paste("Mismatch in cell counts for polygon", i))
-        results$exceed_max_pct[i] <- NA
-        next
-      }
-      
-      # Get max temperature for this polygon from current climate
-      threshold_temp <- results$max_temp[i]
-      
-      # Calculate percentage of cells that exceed the threshold
-      if (length(poly_future) > 0) {
-        pct_above_threshold <- sum(poly_future > threshold_temp) / length(poly_future) * 100
-        results$exceed_max_pct[i] <- pct_above_threshold
-      } else {
-        results$exceed_max_pct[i] <- NA
-      }
-    }
-  }
-  
-  return(results)
-}
-
-# Create sample segments representing ranges
-create_latitude_segments <- function(
-    latitude_sample,  # The latitude_sample data frame from your existing code
-    segments_per_row = c(12, 6, 3, 1),  # Number of segments for each row
-    y_spacing = 5,    # Vertical spacing between rows
-    bottom_margin = -10, # Position of the bottom-most row
-    segment_spacing = 0.1  # Add spacing between segments (as a fraction of segment width)
-) {
-  # Get latitude range from data
-  latitude_min <- min(latitude_sample$y)
-  latitude_max <- max(latitude_sample$y)
-  
-  # Split the data by scenario
-  today_data <- latitude_sample %>% filter(scenario == "Today")
-  future_data <- latitude_sample %>% filter(scenario == "Future")
-  
-  # Initialize output dataframe for segments
-  all_segments <- data.frame()
-  
-  # Generate segments for each row
-  for (row in 1:length(segments_per_row)) {
-    num_segments <- segments_per_row[row]
-    
-    # Position for this row
-    y_position <- bottom_margin - ((row - 1) * y_spacing)
-    
-    if (num_segments == 1) {
-      # For the single segment row, don't apply spacing - use full width
-      adj_range_min <- latitude_min
-      adj_range_max <- latitude_max
-    } else {
-      # For other rows, calculate segment width with spacing as before
-      segment_width <- (latitude_max - latitude_min) / num_segments
-      effective_width <- segment_width * (1 - segment_spacing)
-      
-      # Create breakpoints dividing the latitude range into equal segments
-      breakpoints <- seq(latitude_min, latitude_max, length.out = num_segments + 1)
-    }
-    
-    # Create segments
-    if (num_segments == 1) {
-      # For the single segment row, process the whole range at once
-      range_min <- latitude_min
-      range_max <- latitude_max
-      
-      # For envelope determination, use dense sampling across the range
-      sample_points <- 100
-      latitude_points <- seq(range_min, range_max, length.out = sample_points)
-      
-      # Get temperatures at these points
-      today_temps <- approx(today_data$y, today_data$temperature, latitude_points)$y
-      future_temps <- approx(future_data$y, future_data$temperature, latitude_points)$y
-      
-      # Find min/max of today's temperatures for this range
-      min_envelope <- min(today_temps, na.rm = TRUE)
-      max_envelope <- max(today_temps, na.rm = TRUE)
-      
-      # Check if future temperatures are within envelope
-      within_envelope <- future_temps >= min_envelope & future_temps <= max_envelope
-      
-      # Use run-length encoding to find status changes
-      rle_result <- rle(within_envelope)
-      end_positions <- cumsum(rle_result$lengths)
-      start_positions <- c(1, end_positions[-length(end_positions)] + 1)
-      
-      # Find which sample points correspond to status changes
-      change_indices <- end_positions
-      
-      # Get the latitudes where status changes
-      change_latitudes <- latitude_points[change_indices]
-      
-      # Add the start of range as first transition
-      transition_points <- c(range_min, change_latitudes, range_max)
-      
-      # For a single segment, use the exact latitudes without adjusting
-      vis_transitions <- transition_points
-      
-      # Create segments
-      for (j in 1:(length(vis_transitions)-1)) {
-        # Create segment from current transition to next
-        all_segments <- rbind(all_segments, data.frame(
-          row_id = row,
-          segment_id = paste(row, 1, j, sep = "-"),
-          y_start = vis_transitions[j],
-          y_end = vis_transitions[j+1],
-          y_position = y_position,
-          within_envelope = if(j <= length(rle_result$values)) rle_result$values[j] else !rle_result$values[length(rle_result$values)]
-        ))
-      }
-    } else {
-      # For multi-segment rows, process each segment separately
-      for (i in 1:num_segments) {
-        range_min <- breakpoints[i]
-        range_max <- breakpoints[i + 1]
-        
-        # Apply spacing by shrinking segment width
-        range_center <- (range_min + range_max) / 2
-        adj_range_min <- range_center - (effective_width / 2)
-        adj_range_max <- range_center + (effective_width / 2)
-        
-        # For envelope determination, use dense sampling for accurate checking
-        sample_points <- 100
-        latitude_points <- seq(range_min, range_max, length.out = sample_points)
-        
-        # Get temperatures at these points
-        today_temps <- approx(today_data$y, today_data$temperature, latitude_points)$y
-        future_temps <- approx(future_data$y, future_data$temperature, latitude_points)$y
-        
-        # Find min/max of today's temperatures for this range
-        min_envelope <- min(today_temps, na.rm = TRUE)
-        max_envelope <- max(today_temps, na.rm = TRUE)
-        
-        # Check if future temperatures are within envelope
-        within_envelope <- future_temps >= min_envelope & future_temps <= max_envelope
-        
-        # Use run-length encoding to find status changes
-        rle_result <- rle(within_envelope)
-        end_positions <- cumsum(rle_result$lengths)
-        start_positions <- c(1, end_positions[-length(end_positions)] + 1)
-        
-        # Find which sample points correspond to status changes
-        change_indices <- end_positions
-        
-        # Get the latitudes where status changes
-        change_latitudes <- latitude_points[change_indices]
-        
-        # Add the start of range as first transition
-        transition_points <- c(range_min, change_latitudes, range_max)
-        
-        # Map to adjusted (visualization) coordinates
-        vis_transitions <- adj_range_min + (adj_range_max - adj_range_min) * 
-          (transition_points - range_min) / (range_max - range_min)
-        
-        # Create segments
-        for (j in 1:(length(vis_transitions)-1)) {
-          # Create segment from current transition to next
-          all_segments <- rbind(all_segments, data.frame(
-            row_id = row,
-            segment_id = paste(row, i, j, sep = "-"),
-            y_start = vis_transitions[j],
-            y_end = vis_transitions[j+1],
-            y_position = y_position,
-            within_envelope = if(j <= length(rle_result$values)) rle_result$values[j] else !rle_result$values[length(rle_result$values)]
-          ))
-        }
-      }
-    }
-  }
-  
-  return(all_segments)
-}
-
-
-create_latitude_segments <- function(
-    latitude_sample,  # The latitude_sample data frame from your existing code
-    segments_per_row = c(12, 6, 3, 1),  # Number of segments for each row
-    y_spacing = 5,    # Vertical spacing between rows
-    bottom_margin = -10, # Position of the bottom-most row
-    segment_spacing = 0.1  # Add spacing between segments (as a fraction of segment width)
-) {
-  # Get latitude range from data
-  latitude_min <- min(latitude_sample$y)
-  latitude_max <- max(latitude_sample$y)
-  
-  # Split the data by scenario
-  today_data <- latitude_sample %>% filter(scenario == "Today")
-  future_data <- latitude_sample %>% filter(scenario == "Future")
-  
-  # Initialize output dataframe for segments
-  all_segments <- data.frame()
-  
-  # Initialize dataframe for row statistics
-  row_stats <- data.frame(
-    row_id = integer(),
-    avg_temp_increase = numeric(),
-    pct_exceeding_envelope = numeric()
-  )
-  
-  # Generate segments for each row
-  for (row in 1:length(segments_per_row)) {
-    num_segments <- segments_per_row[row]
-    
-    # Position for this row
-    y_position <- bottom_margin - ((row - 1) * y_spacing)
-    
-    # Track statistics for this row
-    row_segments <- data.frame()
-    total_width <- 0
-    weighted_temp_increase <- 0
-    total_exceeding_width <- 0
-    
-    # MODIFIED: Special handling for the last row (1 segment)
-    if (num_segments == 1) {
-      # For the single segment row, don't apply spacing - use full width
-      adj_range_min <- latitude_min
-      adj_range_max <- latitude_max
-    } else {
-      # For other rows, calculate segment width with spacing as before
-      segment_width <- (latitude_max - latitude_min) / num_segments
-      effective_width <- segment_width * (1 - segment_spacing)
-      
-      # Create breakpoints dividing the latitude range into equal segments
-      breakpoints <- seq(latitude_min, latitude_max, length.out = num_segments + 1)
-    }
-    
-    # Create segments
-    if (num_segments == 1) {
-      # For the single segment row, process the whole range at once
-      range_min <- latitude_min
-      range_max <- latitude_max
-      
-      # For envelope determination, use dense sampling across the range
-      sample_points <- 100
-      latitude_points <- seq(range_min, range_max, length.out = sample_points)
-      
-      # Get temperatures at these points
-      today_temps <- approx(today_data$y, today_data$temperature, latitude_points)$y
-      future_temps <- approx(future_data$y, future_data$temperature, latitude_points)$y
-      
-      # Calculate temperature increase for this segment
-      temp_increase <- mean(future_temps - today_temps, na.rm = TRUE)
-      
-      # Find min/max of today's temperatures for this range
-      min_envelope <- min(today_temps, na.rm = TRUE)
-      max_envelope <- max(today_temps, na.rm = TRUE)
-      
-      # Check if future temperatures are within envelope
-      within_envelope <- future_temps >= min_envelope & future_temps <= max_envelope
-      
-      # Calculate percentage exceeding envelope
-      pct_exceeding <- mean(!within_envelope, na.rm = TRUE) * 100
-      
-      # Use run-length encoding to find status changes
-      rle_result <- rle(within_envelope)
-      end_positions <- cumsum(rle_result$lengths)
-      start_positions <- c(1, end_positions[-length(end_positions)] + 1)
-      
-      # Find which sample points correspond to status changes
-      change_indices <- end_positions
-      
-      # Get the latitudes where status changes
-      change_latitudes <- latitude_points[change_indices]
-      
-      # Add the start of range as first transition
-      transition_points <- c(range_min, change_latitudes, range_max)
-      
-      # For a single segment, use the exact latitudes without adjusting
-      vis_transitions <- transition_points
-      
-      # Create segments
-      for (j in 1:(length(vis_transitions)-1)) {
-        segment_width <- vis_transitions[j+1] - vis_transitions[j]
-        is_within <- if(j <= length(rle_result$values)) rle_result$values[j] else !rle_result$values[length(rle_result$values)]
-        
-        # Create segment from current transition to next
-        segment_data <- data.frame(
-          row_id = row,
-          segment_id = paste(row, 1, j, sep = "-"),
-          y_start = vis_transitions[j],
-          y_end = vis_transitions[j+1],
-          y_position = y_position,
-          width = segment_width,
-          within_envelope = is_within,
-          temp_increase = temp_increase
-        )
-        
-        row_segments <- rbind(row_segments, segment_data)
-        all_segments <- rbind(all_segments, segment_data)
-        
-        # Update statistics
-        total_width <- total_width + segment_width
-        weighted_temp_increase <- weighted_temp_increase + (segment_width * temp_increase)
-        if (!is_within) {
-          total_exceeding_width <- total_exceeding_width + segment_width
-        }
-      }
-    } else {
-      # For multi-segment rows, process each segment separately
-      for (i in 1:num_segments) {
-        range_min <- breakpoints[i]
-        range_max <- breakpoints[i + 1]
-        
-        # Apply spacing by shrinking segment width
-        range_center <- (range_min + range_max) / 2
-        adj_range_min <- range_center - (effective_width / 2)
-        adj_range_max <- range_center + (effective_width / 2)
-        
-        # For envelope determination, use dense sampling for accurate checking
-        sample_points <- 100
-        latitude_points <- seq(range_min, range_max, length.out = sample_points)
-        
-        # Get temperatures at these points
-        today_temps <- approx(today_data$y, today_data$temperature, latitude_points)$y
-        future_temps <- approx(future_data$y, future_data$temperature, latitude_points)$y
-        
-        # Calculate temperature increase for this segment
-        temp_increase <- mean(future_temps - today_temps, na.rm = TRUE)
-        
-        # Find min/max of today's temperatures for this range
-        min_envelope <- min(today_temps, na.rm = TRUE)
-        max_envelope <- max(today_temps, na.rm = TRUE)
-        
-        # Check if future temperatures are within envelope
-        within_envelope <- future_temps >= min_envelope & future_temps <= max_envelope
-        
-        # Calculate percentage exceeding envelope
-        pct_exceeding <- mean(!within_envelope, na.rm = TRUE) * 100
-        
-        # Use run-length encoding to find status changes
-        rle_result <- rle(within_envelope)
-        end_positions <- cumsum(rle_result$lengths)
-        start_positions <- c(1, end_positions[-length(end_positions)] + 1)
-        
-        # Find which sample points correspond to status changes
-        change_indices <- end_positions
-        
-        # Get the latitudes where status changes
-        change_latitudes <- latitude_points[change_indices]
-        
-        # Add the start of range as first transition
-        transition_points <- c(range_min, change_latitudes, range_max)
-        
-        # Map to adjusted (visualization) coordinates
-        vis_transitions <- adj_range_min + (adj_range_max - adj_range_min) * 
-          (transition_points - range_min) / (range_max - range_min)
-        
-        # Create segments
-        for (j in 1:(length(vis_transitions)-1)) {
-          segment_width <- vis_transitions[j+1] - vis_transitions[j]
-          is_within <- if(j <= length(rle_result$values)) rle_result$values[j] else !rle_result$values[length(rle_result$values)]
-          
-          # Create segment from current transition to next
-          segment_data <- data.frame(
-            row_id = row,
-            segment_id = paste(row, i, j, sep = "-"),
-            y_start = vis_transitions[j],
-            y_end = vis_transitions[j+1],
-            y_position = y_position,
-            width = segment_width,
-            within_envelope = is_within,
-            temp_increase = temp_increase
-          )
-          
-          row_segments <- rbind(row_segments, segment_data)
-          all_segments <- rbind(all_segments, segment_data)
-          
-          # Update statistics
-          total_width <- total_width + segment_width
-          weighted_temp_increase <- weighted_temp_increase + (segment_width * temp_increase)
-          if (!is_within) {
-            total_exceeding_width <- total_exceeding_width + segment_width
-          }
-        }
-      }
-    }
-    
-    # Calculate row statistics
-    avg_temp_increase <- weighted_temp_increase / total_width
-    pct_exceeding_envelope <- (total_exceeding_width / total_width) * 100
-    
-    # Add row statistics
-    row_stats <- rbind(row_stats, data.frame(
-      row_id = row,
-      avg_temp_increase = avg_temp_increase,
-      pct_exceeding_envelope = pct_exceeding_envelope
-    ))
-  }
-  
-  # Return both segments and statistics
-  return(list(
-    segments = all_segments,
-    stats = row_stats
-  ))
-}
-
-
-
-
-
-
-# Run simulation 2d
-# --------------
-
-options(scipen=999)
-
-# Parameters
-grid_size <- 1000  # Grid dimensions (1000 x 1000)
-num_polygons <- 1000  # Number of polygons to generate
-min_polygon_size <- 2  # Minimum polygon size (radius for circular approximation)
-max_polygon_size <- 1000  # Maximum polygon size
-
-# Set random seed for reproducibility
-set.seed(123)
-
-# Create temperature gradient
-temp_raster <- create_temperature_gradient(grid_size,max_temp=30, min_temp=0)
-
-# Generate polygons
-polygons <- generate_polygons(num_polygons, grid_size, min_polygon_size, max_polygon_size)
-
-# Create future temperature gradient
-future_temp_raster <- create_temperature_gradient(grid_size, max_temp=35, min_temp=5)
-
-# Calculate temperature increase and envelope exceedance
-results_2d <- measure_advanced_temperature(polygons, temp_raster, future_temp_raster)
-
-
-
-## plot latitude/longitude and temperature profile in 2d
-
-temp_df <- as.data.frame(temp_raster, xy=TRUE)
-names(temp_df) <- c("x", "y", "temperature")
-temp_df$scenario <- "Today"
-
-future_temp_df <- as.data.frame(future_temp_raster, xy=TRUE)
-names(future_temp_df) <- c("x", "y", "temperature")
-future_temp_df$scenario <- "Future"
-combined_temp_df <- rbind(temp_df, future_temp_df)
-
-latitude_sample <- combined_temp_df[combined_temp_df$x == 0.5, ]
-plot1 <- ggplot(latitude_sample, aes(x = y, y = temperature, color = scenario)) +
-  geom_line(size = 1) +
-  scale_color_manual(values = c("Today" = "blue", "Future" = "red")) +
-  theme_classic() +
-  labs(x = "Latitude", 
-       y = "Temperature (°C)",
-       color = "Scenario")+
-  theme(axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
-
-
-segment_result <- create_latitude_segments(latitude_sample)
-segments_plot <- segment_result$segments
-row_stats <- segment_result$stats
-
-y_position_map <- c(
-  "-10" = -4,  # Current -10 -> new -2.5
-  "-15" = -5,    # Current -15 -> new -5
-  "-20" = -6,  # Current -20 -> new -7.5
-  "-25" = -7    # Current -25 -> new -10
-)
-
-# Apply the mapping to create a new y_position column
-segments_plot$y_position_new <- y_position_map[as.character(segments_plot$y_position)]
-
-# Format the statistics for display
-stats_text <- row_stats %>%
-  mutate(
-    label = sprintf("%.1f°C, %.1f%%",
-                    avg_temp_increase, 
-                    pct_exceeding_envelope))
-
-
-plot1 + 
-  geom_segment(data = segments_plot,
-               aes(x = y_start, xend = y_end,
-                   y = y_position_new, yend = y_position_new,
-                   color = within_envelope),
-               linewidth = 1.5) +
-  scale_color_manual(values = c("Today" = "blue", "Future" = "red", 
-                                "TRUE" = "#3d8c40", "FALSE" = "orange"),
-                     name = "Temperature/Status",
-                     breaks = c("Today", "Future", TRUE, FALSE),
-                     labels = c("Today", "Future", "Within envelope", "Exceeding envelope")) +
-  # Add statistics text annotations
-  # geom_text(data = stats_text,
-  #           aes(x = max(segments_plot$y_end) + 20, # Position to the right of the segments
-  #               y = unique(segments_plot$y_position)[row_id], # Position at each row's y value
-  #               label = label),
-  #           hjust = 0, # Left-align text
-  #           size = 3.5) +
-  # Set y-axis to start at 0
-  scale_y_continuous(
-    limits = c(min(segments_plot$y_position_new) - 0.5, NA),
-    breaks = seq(0, 40, by = 10),  # Only show positive breaks
-    labels = function(x) ifelse(x >= 0, x, "")  # Hide negative labels
-  ) +
-  # Add a horizontal line at y=0 to serve as x-axis
-  geom_hline(yintercept = 0) +
-  # Remove all x-axis elements from the theme
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank(),
-    axis.title.x = element_blank(),  # Remove the default x title
-    axis.line.x = element_blank(),
-    # Fix legend to show only lines
-    legend.key.size = unit(1.5, "lines"),
-    legend.key.height = unit(1.5, "lines")
-  ) +
-  # Add a single custom "Latitude" label at y=0
-  annotate("text", x = 500, y = 0, 
-           label = "Latitude", vjust = 2.5, hjust = 0.5) +
-  # Remove the original x-axis title
-  xlab(NULL) +
-  # Make sure plot extends to show the text
-  coord_cartesian(xlim = c(NA, max(segments_plot$y_end) + 200)) +
-  # Override the line segments in the legend to show only lines
-  guides(color = guide_legend(override.aes = list(shape = NA)))
-
-
-
-
-
-
-plot2_2d <- ggplot(results_2d, aes(x = area/ (grid_size * grid_size), y = temp_increase)) +
-  #geom_point(alpha = 0.6, color = "darkred") +
-  geom_pointdensity()+
-  #geom_hex()+
-  scale_color_gradient(low='#eff3ff',high="#2171b5") + 
-  #geom_smooth(method = "loess", color = "black") +
-  theme_classic() +
-  labs(x = "% of domain", 
-       y = "Mean temperature increase (°C)")+
-  scale_x_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100),
-                     breaks = seq(0, 1, 0.2))+
-  theme(legend.position="none")
-
-
-# plot range size vs habitat loss
-plot3_2d <- ggplot(results_2d, aes(x = area / (grid_size * grid_size), y = exceed_max_pct)) +
-  #geom_pointdensity()+
-  geom_hex()+
-  scale_fill_gradient(low='#eff3ff',high="#2171b5") + #scale_color for point, scale_fill for hex
-  #scale_fill_viridis_c()+
-  stat_summary_bin(
-    fun = "mean", 
-    geom = "line",
-    color = "black",
-    linewidth = 1,
-    bins = 10  
-  ) +
-  #geom_smooth(method = "loess", span = 0.3,color = "black",se=F) +
-  theme_classic() +
-  labs(x = "Latitudinal range", 
-       y = "Habitat loss \n(% above today's max temp)")+
-  scale_x_continuous(limits = c(0, 1), 
-                     labels = scales::percent_format(scale = 100))+
-  theme(legend.position="none")
-
-#plot range size distribution
-plot4_2d <- ggplot(results_2d,aes(x=area / (grid_size * grid_size)))+
-  geom_histogram(fill = "lightgray", color = "black")+
-  theme_classic()+
-  labs(x = "Latitudinal range", 
-       y = "Count")+
-  scale_x_continuous(limits = c(-0.05, 1), 
-                     labels = scales::percent_format(scale = 100))
-
-plot_grid(plot1, plot2_2d,plot3_2d,plot4_2d, labels = c("A", "B","C","D"), ncol = 4)
-
-
-plot_grid(plot1, plot2,plot3, labels = c("A", "B","C"), ncol = 3)
 
 

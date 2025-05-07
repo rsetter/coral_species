@@ -384,3 +384,436 @@ fwrite(species_coord,paste0(output_directory, 'species_pixels_1982-1992.csv'))
 fwrite(species_envelope,paste0(output_directory, 'climate_envelopes_1982-1992.csv'))
 fwrite(allcoral_envelope,paste0(output_directory, 'allcoral_envelopes_1982-1992.csv'))
 fwrite(allcoral_coord, paste0(output_directory, 'allcoral_pixels_1982-1992.csv'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###  ecoregion scale 
+
+meow <- vect(paste0(ecosystem_folder, "Marine Ecoregions of the World"))
+coral_points <- vect(species_coord, geom=c("x", "y"), crs=crs(meow))
+ecosystems_df <- terra::extract(meow, coral_points) #15% of pixels not assigned a realm
+
+
+# Add ecosystem information to the species coordinates
+species_coord$realm <- ecosystems_df$REALM
+species_coord$province <- ecosystems_df$PROVINCE
+species_coord$ecoregion <- ecosystems_df$ECOREGION
+
+ecoregion_lookup <- species_coord[, .(x, y, realm, province, ecoregion)] %>% unique()
+allcoral_coord <- merge(allcoral_coord, ecoregion_lookup, by=c("x", "y"), all.x=TRUE)
+
+
+# Function to calculate envelopes for a group of points
+calculate_envelope <- function(group_data, group_name, level_name) {
+  envelope <- data.frame(
+    id_no = paste0(group_name, "_", level_name),
+    realm = level_name,
+    sst_min_absolute = min(group_data$sst_min, na.rm = TRUE),
+    sst_max_absolute = max(group_data$sst_max, na.rm = TRUE),
+    sst_min = quantile(group_data$sst_min, probs = 0.025, na.rm = TRUE),
+    sst_max = quantile(group_data$sst_max, probs = 0.975, na.rm = TRUE),
+    sst_mean = mean(group_data$sst_mean, na.rm = TRUE),
+    sst_median = mean(group_data$sst_median, na.rm = TRUE),
+    sst_summer_mean = mean(group_data$sst_summer_mean, na.rm = TRUE),
+    ph_min_absolute = min(group_data$ph_min, na.rm = TRUE),
+    ph_max_absolute = max(group_data$ph_max, na.rm = TRUE),
+    ph_min = quantile(group_data$ph_min, probs = 0.025, na.rm = TRUE),
+    ph_max = quantile(group_data$ph_max, probs = 0.975, na.rm = TRUE),
+    ph_mean = mean(group_data$ph_mean, na.rm = TRUE),
+    ph_median = mean(group_data$ph_median, na.rm = TRUE),
+    ph_summer_mean = mean(group_data$ph_summer_mean, na.rm = TRUE)
+  )
+  return(envelope)
+}
+
+# Calculate envelopes by realm for all corals combined
+realms <- unique(allcoral_coord$realm)
+realm_envelopes <- data.table()
+
+for (realm_name in realms) {
+  if (is.na(realm_name)) next
+  
+  realm_data <- allcoral_coord[realm == realm_name]
+  if (nrow(realm_data) > 0) {
+    realm_envelope <- calculate_envelope(realm_data, "allcoral", realm_name)
+    realm_envelopes <- rbind(realm_envelopes, realm_envelope)
+  }
+}
+
+
+# Write results to CSV
+fwrite(realm_envelopes, paste0(output_directory, 'realm_envelopes_1982-1992.csv'))
+
+# Update the main dataframes with realm information
+fwrite(species_coord, paste0(output_directory, 'species_pixels_with_ecoregions_1982-1992.csv'))
+fwrite(allcoral_coord, paste0(output_directory, 'allcoral_pixels_with_ecoregions_1982-1992.csv'))
+
+
+
+
+
+
+
+
+
+
+#oceans
+oceans <- vect(paste0(ecosystem_folder, "GlobalOceans"))
+
+
+allcoral_coord180 <- allcoral_coord
+
+# Convert longitude from 0-360° to -180 to 180°
+allcoral_coord180$x_180 <- ifelse(allcoral_coord$x > 180, 
+                                   allcoral_coord$x - 360, 
+                                   allcoral_coord$x)
+
+coral_pt <- vect(allcoral_coord180, geom=c("x_180", "y"), crs="EPSG:4326")
+
+coral_oceans <- extract(oceans, coral_pt)
+
+# Join the ocean basin information back to original data frame
+allcoral_coord$ocean_basin <- coral_oceans$name
+sum(is.na(allcoral_coord$ocean_basin))
+na_rows <- which(is.na(allcoral_coord$ocean_basin))
+
+# For each NA point, find the closest point with a non-NA ocean_basin
+for (i in na_rows) {
+  x_i <- allcoral_coord$x[i]
+  y_i <- allcoral_coord$y[i]
+  
+  # Define what "adjacent" means - points within 1 degree
+  adjacent_threshold <- 1
+  
+  # Find non-NA points
+  non_na_points <- which(!is.na(allcoral_coord$ocean_basin))
+  
+  # Calculate distances to all non-NA points
+  distances <- sqrt((allcoral_coord$x[non_na_points] - x_i)^2 + 
+                      (allcoral_coord$y[non_na_points] - y_i)^2)
+  
+  # Find the closest point within threshold
+  adjacent_indices <- non_na_points[distances <= adjacent_threshold]
+  
+  if (length(adjacent_indices) > 0) {
+    # Get the most common ocean_basin among adjacent points
+    adjacent_groups <- allcoral_coord$ocean_basin[adjacent_indices]
+    realm_group_counts <- table(adjacent_groups)
+    most_common_group <- names(realm_group_counts)[which.max(realm_group_counts)]
+    
+    # Assign the most common adjacent ocean_basin
+    allcoral_coord$ocean_basin[i] <- most_common_group
+  }
+}
+
+
+unique(allcoral_coord$ocean_basin)
+
+allcoral_coord$ocean <- allcoral_coord$ocean_basin
+allcoral_coord$ocean <- gsub("North Pacific.*|South Pacific.*|.*Pacific.*", "Pacific", allcoral_coord$ocean)
+allcoral_coord$ocean <- gsub(".*South China and Easter Archipelagic Seas.*", "Pacific", allcoral_coord$ocean)
+allcoral_coord$ocean <- gsub(".*Mediterranean Region.*" , "Atlantic", allcoral_coord$ocean)
+allcoral_coord$ocean <- gsub("North Atlantic.*|South Atlantic.*|.*Atlantic.*", "Atlantic", allcoral_coord$ocean)
+allcoral_coord$ocean <- gsub(".*Indian.*", "Indian", allcoral_coord$ocean)
+
+# fix ocean-pixel assignmetns due to mismatch in resolution
+species_per_pixel <- species_coord[, .(num_species = uniqueN(species_id)), by = .(x, y)]
+ocean_lookup <- allcoral_coord[, .(lon, y, current_ocean = ocean)]
+names(ocean_lookup) <- c("x","y","current_ocean")
+species_locations <- unique(species_coord[, .(x, y, species_id)])
+species_with_ocean <- merge(species_locations, ocean_lookup, by = c("x", "y"), all.x = TRUE)
+species_ocean_dist <- species_with_ocean[!is.na(current_ocean), .(pixel_count = .N), by = .(species_id, current_ocean)]
+species_totals <- species_ocean_dist[, .(total_pixels = sum(pixel_count)), by = species_id]
+species_ocean_pct <- merge(species_ocean_dist, species_totals, by = "species_id")
+species_ocean_pct[, pct_in_ocean := pixel_count / total_pixels]
+species_ocean_wide <- dcast(species_ocean_pct, species_id ~ current_ocean,value.var = "pct_in_ocean", fill = 0)
+setnames(species_ocean_wide,  c("Pacific", "Atlantic", "Indian"), c("pct_range_pac", "pct_range_atl", "pct_range_ind"), skip_absent = TRUE)
+species_per_pixel <- species_locations[, .(num_species = .N), by = .(x, y)]
+pixel_species <- species_locations[, .(species_list = list(species_id)), by = .(x, y)]
+
+calculate_ocean_pcts <- function(species_list, species_ocean_wide) {
+  subset_data <- species_ocean_wide[species_id %in% unlist(species_list)]
+  
+  return(data.table(
+    pct_range_pac = mean(subset_data$pct_range_pac, na.rm = TRUE),
+    pct_range_atl = mean(subset_data$pct_range_atl, na.rm = TRUE),
+    pct_range_ind = mean(subset_data$pct_range_ind, na.rm = TRUE)
+  ))
+}
+pixel_ocean_pcts <- pixel_species[, calculate_ocean_pcts(species_list, species_ocean_wide), by = .(x, y)]
+pixel_ocean_pcts[, likely_ocean := fifelse(
+  pct_range_pac > pct_range_atl & pct_range_pac > pct_range_ind, "Pacific",
+  fifelse(pct_range_atl > pct_range_pac & pct_range_atl > pct_range_ind, "Atlantic",
+          fifelse(pct_range_ind > pct_range_pac & pct_range_ind > pct_range_atl, "Indian", 
+                  "Undetermined"))
+)]
+pixel_summary <- merge(pixel_ocean_pcts, species_per_pixel, by = c("x", "y"))
+comparison <- merge(pixel_summary, ocean_lookup, by = c("x", "y"), all.x = TRUE)
+comparison[, needs_reassignment := FALSE] 
+comparison[current_ocean == "Atlantic" & (likely_ocean == "Pacific" | likely_ocean == "Indian"), 
+           needs_reassignment := TRUE]
+comparison[(current_ocean == "Pacific" | current_ocean == "Indian") & likely_ocean == "Atlantic",
+           needs_reassignment := TRUE]
+#2 pixels identified as needing reassignment
+pixels_to_update <- data.table(
+  x = c(20, 33),
+  y = c(-35.5, 30.5),
+  new_ocean = c("Pacific", "Indian")) #currently both assigned as atlantic
+for (i in 1:nrow(pixels_to_update)) {
+  x_val <- pixels_to_update[i, x]
+  y_val <- pixels_to_update[i, y]
+  new_ocean <- pixels_to_update[i, new_ocean]
+  
+  allcoral_coord[x == x_val & y == y_val, ocean := new_ocean]
+}
+
+
+# more cleaning of species only present in indo-pacific, not atlantic
+pacific_species <- unique(species_coord_ocean[ocean == "Pacific", .(species_id)])
+atlantic_species <- unique(species_coord_ocean[ocean == "Atlantic", .(species_id)])
+indian_species <- unique(species_coord_ocean[ocean == "Indian", .(species_id)])
+pacific_atlantic <- merge(pacific_species, atlantic_species, by = "species_id")
+pacific_indian <- merge(pacific_species, indian_species, by = "species_id")
+atlantic_indian <- merge(atlantic_species, indian_species, by = "species_id")
+all_oceans <- merge(pacific_atlantic, indian_species, by = "species_id")
+
+#fix points that should be assigned pacific, not atlantic
+species_to_fix <- all_oceans$species_id
+
+pixel_ocean_lookup <- unique(allcoral_coord[, .(x, y, ocean)])
+setkey(pixel_ocean_lookup, x, y)
+
+changes_made <- list()
+
+for (sp_id in species_to_fix) {
+  # Get all pixels for this SINGLE species
+  sp_pixels <- species_coord[species_id == sp_id, .(x, y)]
+  
+  # Add current ocean assignment
+  sp_pixels <- merge(sp_pixels, pixel_ocean_lookup, by = c("x", "y"), all.x = TRUE)
+  
+  # Identify Atlantic pixels that need to be reassigned
+  atlantic_pixels <- sp_pixels[ocean == "Atlantic"]
+  
+  if (nrow(atlantic_pixels) == 0) {
+    cat("No Atlantic pixels found for species", sp_id, "\n")
+    next
+  }
+  
+  # Find non-Atlantic pixels for this species
+  valid_pixels <- sp_pixels[ocean %in% c("Pacific", "Indian")]
+  
+  if (nrow(valid_pixels) == 0) {
+    cat("Warning: No Pacific/Indian pixels found for species", sp_id, "- cannot determine nearest ocean\n")
+    next
+  }
+  
+  # For each Atlantic pixel, find the nearest valid pixel
+  for (i in 1:nrow(atlantic_pixels)) {
+    current_pixel <- atlantic_pixels[i]
+    
+    # Calculate distances to all valid pixels
+    coords_query <- matrix(c(current_pixel$x, current_pixel$y), ncol = 2)
+    coords_reference <- as.matrix(valid_pixels[, .(x, y)])
+    
+    # Handle cases where longitude wraps around
+    distances <- rep(Inf, nrow(coords_reference))
+    for (j in 1:nrow(coords_reference)) {
+      # Calculate direct distance
+      dx <- coords_reference[j, 1] - coords_query[1]
+      dy <- coords_reference[j, 2] - coords_query[2]
+      
+      # Check if wrapping around in x direction would make it closer
+      # Assuming 360 degree wrap-around
+      if (abs(dx) > 180) {
+        if (dx > 0) dx = dx - 360
+        else dx = dx + 360
+      }
+      
+      distances[j] <- sqrt(dx^2 + dy^2)
+    }
+    
+    # Find the index of the closest valid pixel
+    closest_idx <- which.min(distances)
+    new_ocean <- valid_pixels[closest_idx, ocean]
+    
+    # Record the change
+    changes_made[[length(changes_made) + 1]] <- data.table(
+      species_id = sp_id,
+      x = current_pixel$x,
+      y = current_pixel$y,
+      old_ocean = "Atlantic",
+      new_ocean = new_ocean
+    )
+    
+    # Update the pixel ocean assignment in allcoral_coord
+    allcoral_coord[x == current_pixel$x & y == current_pixel$y, ocean := new_ocean]
+    
+    # Update ocean_envelopes if it has the same structure
+    if ("x" %in% names(ocean_envelopes) && "y" %in% names(ocean_envelopes) && "ocean" %in% names(ocean_envelopes)) {
+      ocean_envelopes[x == current_pixel$x & y == current_pixel$y, ocean := new_ocean]
+    }
+  }
+  
+  cat("Fixed", nrow(atlantic_pixels), "Atlantic pixels for species", sp_id, "\n")
+}
+
+all_changes <- rbindlist(changes_made)
+
+
+#fix points that should be assigned atlantic, not pacific
+species_to_fix <- pacific_atlantic$species_id
+
+pixel_ocean_lookup <- unique(allcoral_coord[, .(x, y, ocean)])
+setkey(pixel_ocean_lookup, x, y)
+
+problematic_pixels <- data.table()
+for (sp_id in species_to_fix) {
+  # Get all pixels for this species
+  sp_pixels <- species_coord[species_id == sp_id, .(x, y)]
+  
+  # Add current ocean assignment
+  sp_pixels <- merge(sp_pixels, pixel_ocean_lookup, by = c("x", "y"), all.x = TRUE)
+  
+  # Identify Pacific pixels that need to be reassigned to Atlantic
+  pacific_pixels <- sp_pixels[ocean == "Pacific", .(species_id = sp_id, x, y, ocean)]
+  
+  if (nrow(pacific_pixels) > 0) {
+    problematic_pixels <- rbind(problematic_pixels, pacific_pixels)
+    cat("Found", nrow(pacific_pixels), "Pacific pixels for Atlantic-only species", sp_id, "\n")
+  }
+}
+unique_xy <- unique(problematic_pixels[, c("x", "y")]) #three panama-adjacent pixels being assigned as both atlantic & pacific
+
+problem_pxl_mask <- allcoral_coord$x %in% c(278, 279,281, 282) & 
+  allcoral_coord$y %in% c(8.5, 9.5)
+
+allcoral_coord$ocean[problem_pxl_mask] <- NA
+
+
+
+
+#calculate envelopes
+oceans <- unique(allcoral_coord$ocean)
+ocean_envelopes <- data.table()
+
+for (ocean_name in oceans) {
+  if (is.na(ocean_name)) next
+  
+  ocean_data <- allcoral_coord[ocean == ocean_name]
+  if (nrow(ocean_data) > 0) {
+    ocean_envelope <- calculate_envelope(ocean_data, "allcoral", ocean_name)
+    ocean_envelopes <- rbind(ocean_envelopes, ocean_envelope)
+  }
+}
+
+setnames(ocean_envelopes, "realm", "ocean")
+fwrite(ocean_envelopes, paste0(output_directory, 'ocean_envelopes_1982-1992.csv'))
+fwrite(allcoral_coord, paste0(output_directory, 'allcoral_pixels_with_oceans_1982-1992.csv'))
+
+
+#calculate envelope for indo-pacific
+indo_pacific_data <- allcoral_coord[ocean %in% c("Indian", "Pacific")]
+indo_pacific_envelope <- calculate_envelope(indo_pacific_data, "allcoral", "indo-pacific")
+setnames(indo_pacific_envelope, "realm", "ocean")
+ocean_envelopes <- rbind(ocean_envelopes, indo_pacific_envelope)
+
+
+fwrite(ocean_envelopes, paste0(output_directory, 'ocean_envelopes_1982-1992.csv'))
+
+
+
+
+
+
+
+
+
+
+# Add aragonite analysis
+
+
+
+arag <- rast(paste0(cmip_folder, "arag/Aragonite_median_historical_foc.nc"))
+
+# Extract layer 16 which corresponds to 1982-1992 period
+arag_8292 <- arag[[16]]
+
+# Rotate to match the coordinate system of other variables
+arag180 <- rotate(arag_8292)
+arag180r <- crop(arag180, ext(-180.5, -180, -90, 90))
+arag180l <- crop(arag180, ext(-180, 179.5, -90, 90))
+arag180r <- terra::shift(arag180r, dx = 360)
+arag180 <- merge(arag180l, arag180r)
+
+# Extract aragonite values for species coordinates
+coords <- unique(species_coord[, .(x, y)])
+points <- vect(coords, geom=c("x", "y"), crs=crs(arag180))
+
+# Extract aragonite values at each point
+arag_values <- terra::extract(arag180, points)
+
+# Create a lookup table with coordinates and aragonite values
+arag_lookup <- data.table(
+  x = coords$x,
+  y = coords$y,
+  aragonite = arag_values[[2]])
+
+# Merge aragonite values into the species coordinates data
+allcoral_coord[, aragonite := NULL]
+species_coord[, aragonite := NULL]
+species_coord <- merge(species_coord, arag_lookup, by=c("x", "y"), all.x=TRUE)
+#allcoral_coord <- merge(allcoral_coord, arag_lookup, by=c("x", "y"), all.x=TRUE)
+allcoral_coord_temp <- copy(allcoral_coord)
+allcoral_coord_temp[, x_adj := ifelse(x > 180, x - 360, x)]
+allcoral_coord_temp <- merge(allcoral_coord_temp, 
+                             arag_lookup[, .(x, y, aragonite)], 
+                             by.x=c("x_adj", "y"), by.y=c("x", "y"), all.x=TRUE)
+allcoral_coord[, aragonite := allcoral_coord_temp$aragonite]
+
+# Calculate species-level aragonite statistics
+species_arag <- species_coord[, .(
+  aragonite_mean = mean(aragonite, na.rm=TRUE),
+  aragonite_min = quantile(aragonite, probs = 0.025, na.rm = TRUE),
+  aragonite_max = quantile(aragonite, probs = 0.975, na.rm = TRUE),
+  aragonite_min_absolute = min(aragonite, na.rm = TRUE),
+  aragonite_max_absolute = max(aragonite, na.rm = TRUE),
+  aragonite_median = median(aragonite, na.rm = TRUE)
+), by=species_id]
+
+allcoral_arag <- allcoral_coord[, .(
+  aragonite_mean = mean(aragonite, na.rm=TRUE),
+  aragonite_min = quantile(aragonite, probs = 0.025, na.rm = TRUE),
+  aragonite_max = quantile(aragonite, probs = 0.975, na.rm = TRUE),
+  aragonite_min_absolute = min(aragonite, na.rm = TRUE),
+  aragonite_max_absolute = max(aragonite, na.rm = TRUE),
+  aragonite_median = median(aragonite, na.rm = TRUE)
+), by=species_id]
+
+# Merge aragonite statistics into the species envelope data
+species_arag$species_id <- as.character(species_arag$species_id)
+allcoral_arag$species_id <- as.character(allcoral_arag$species_id)
+species_envelope$id_no <- as.character(species_envelope$id_no)
+species_envelope <- merge(species_envelope, species_arag, by.x="id_no", by.y="species_id", all.x=TRUE)
+allcoral_envelope <- merge(allcoral_envelope, allcoral_arag, by.x="id_no", by.y="species_id", all.x=TRUE)
+
+# Save updated data with aragonite information
+fwrite(species_coord, paste0(output_directory, 'species_pixels_1982-1992_with_arag.csv'))
+fwrite(species_envelope, paste0(output_directory, 'climate_envelopes_1982-1992_with_arag.csv'))
+fwrite(allcoral_envelope, paste0(output_directory, 'allcoral_envelopes_1982-1992_with_arag.csv'))
+fwrite(allcoral_coord, paste0(output_directory, 'allcoral_pixels_1982-1992_with_arag.csv'))
+

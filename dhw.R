@@ -233,10 +233,13 @@ for(scenario in scenarios){
   # Save summary file
   fwrite(all_species_summary, 
          file = paste0(output_directory, "coralsp_dhwsummary_annual_", scenario, ".csv"))
-  
+}
+
   # Now process all coral data
   allcoral_envelope <- fread(paste0(output_directory, 'allcoral_envelopes_1982-1992.csv'))
   allcoral_coord <- fread(paste0(output_directory, 'allcoral_pixels_1982-1992.csv'))
+  allcoral_coord$x <- ifelse(allcoral_coord$x < 0, allcoral_coord$x + 360, allcoral_coord$x)
+  
   
   # Get unique coordinates
   coords_dt <- unique(allcoral_coord[, .(x, y)])
@@ -258,7 +261,7 @@ for(scenario in scenarios){
     mean_dhw_duration = numeric(length(years)),
     dhw_exceed_area = numeric(length(years)),
     duration_exceed_area = numeric(length(years)),
-    total_area = sum(allcoral_coord$sp_area)
+    total_area = sum(allcoral_coord$sp_area,na.rm=T)
   )
   
   for(y in years){
