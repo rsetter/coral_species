@@ -393,18 +393,42 @@ temp_envelope_global <-  ggplot() +
   )
 
 
+# cumulative global
+
+species_exceeded_global <- exceed585_underestimate %>%
+  group_by(year) %>%
+  summarise(
+    total_species = n_distinct(species_id),
+    num_species_exceeding_90pct = sum(pct_exceed_temp_area > 0.9),
+    pct_species_exceeding_90pct = (num_species_exceeding_90pct / total_species) * 100,
+    .groups = 'drop')
+max_num_species_g <- max(species_exceeded_global$total_species, na.rm = TRUE)
+scaling_factor_g <- 1 # if using num_... 100 / max_num_species_ip
+
+sp_exceed_global <- ggplot() +
+  geom_line(data = species_exceeded_global, aes(x = year, y = pct_species_exceeding_90pct * scaling_factor_g), 
+            linewidth = 1, color = "blue") +
+  geom_line(data = exceed585_underestimate, aes(x = year, y = allcoral_pct_temp * 100),
+            linewidth = 1, linetype = "solid") +
+  scale_y_continuous(name = "Habitat loss (area exceeding \ntemperature envelopes (%))", limits = c(0, 100), expand = c(0, 0), breaks = seq(0, 100, 20),
+                     sec.axis = sec_axis(transform = ~ . / scaling_factor_g, name = "Species with >90% area exceeded (%)", 
+                                         breaks = scales::pretty_breaks(n = 5))) +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(x = "Year",title="Global") +
+  theme_classic() +
+  theme(axis.title.y.right = element_text(color = "blue"), axis.text.y.right = element_text(color = "blue"), axis.ticks.y.right = element_line(color = "blue"))
 
 
 
 
 fig_ocean <- plot_grid(habloss_plot_atl,atlantic_plot,pct_underestimated_temp_atl,
                        habloss_plot_indopac ,indopac_plot,pct_underestimated_temp_indopac,
-                       temp_envelope_global,temp_envelope_underestimate,pct_underestimated_temp,
-                        labels = c("A","B","C","D","E","F","G","H","I"),
-                        ncol = 3, nrow=3, align="hv")
+                       temp_envelope_global,temp_envelope_underestimate,pct_underestimated_temp,sp_exceed_global,
+                        labels = c("A","B","C","D","E","F","G","H","I","J"),
+                        ncol = 3, nrow=4, align="hv")
 
 ggsave(paste0(figures_folder, "fig_S_temp_ocean.png"), fig_ocean, 
-       width = 10, height = 10, dpi = 350)
+       width = 10, height = 12, dpi = 350)
 
 
 

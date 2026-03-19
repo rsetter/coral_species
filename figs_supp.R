@@ -671,20 +671,42 @@ aragdelta_range <- ggplot(exceed585_arag[exceed585_arag$decade==2100,], aes(x = 
   theme(legend.position="none")
 
 
+
+
+# Sort the Aragonite data by range size (as a proportion of domain)
+sorted_dataarag <- exceed585_arag[exceed585_arag$decade == 2100, ] %>%
+  filter(species_id != "allcoral") %>% 
+  arrange(total_area / exceedall585_arag$total_area[1])
+
+# Calculate cumulative percentage of species
+sorted_dataarag$cum_species_pct <- seq_len(nrow(sorted_dataarag)) / nrow(sorted_dataarag)
+
 # % loss vs range size
 aragexceed_range <- ggplot(exceed585_arag[exceed585_arag$decade==2100,] %>% filter(species_id != "allcoral"), 
                            aes(x = total_area/exceedall585_arag$total_area[1]*100, y = pct_exceed_arag_area*100)) +
   geom_pointdensity()+
   scale_color_gradient(low='#cbecff',high="#2171b5",trans="log10") + #scale_color for point, scale_fill for hex
   geom_smooth(method = "loess", span = 0.3,color = "black",se=F) +
+  # Add the cumulative species line
+  geom_line(data = sorted_dataarag, aes(x = total_area/exceedall585_arag$total_area[1]*100, y = cum_species_pct*100), color = "blue", linewidth = 1) +
   theme_classic() +
-  labs(x = "Range as proportion \nof domain size", 
+  labs(x = "Range as proportion \nof domain size (%)", 
        y = "Area exceeding \nΩarag envelope (%)")+
-  scale_x_continuous(limits = c(0, 100), 
-                     breaks = seq(0, 100, 20))+
-  scale_y_continuous(limits = c(0, 100),
-                     breaks = seq(0, 100, 20))+
-  theme(legend.position="none")
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, 20),expand = c(0,0))+
+  scale_y_continuous(
+    name = "Area exceeding\nΩarag envelope (%)",
+    sec.axis = sec_axis(~., name = "Cumulative species (%)"),
+    expand=c(0,0),
+    limits = c(0, 100.5),
+    breaks = seq(0, 100, 20)
+  ) +
+  theme(legend.position="none")+
+  theme(legend.position="none",
+        axis.title.y.right = element_text(color = "blue"),
+        axis.text.y.right = element_text(color = "blue"),
+        axis.line.y.right = element_line(color="blue"))
+
+
 
 
 

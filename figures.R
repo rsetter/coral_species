@@ -5,6 +5,7 @@ library(dplyr)
 library(tidyr)
 library(tidyverse)
 library(ggridges)
+library(ggpointdensity)
 
 
 source("functions.R")
@@ -345,8 +346,7 @@ tempexceed_range <- ggplot(exceed585[exceed585$year==2100,] %>% filter(species_i
        y = "Area habitat loss \nby 2100 (%)")+
   scale_y_continuous(
     name = "Area exceeding\n thermal envelope (%)",
-    sec.axis = sec_axis(~. * 100 / max(results_sim$exceed_max_pct), 
-                        name = "Cumulative species (%)"),
+    sec.axis = sec_axis(~., name = "Cumulative species (%)"),
     expand=c(0,0),
     limits = c(0, 100.5),
     breaks = seq(0, 100, 20)
@@ -450,13 +450,13 @@ pct_loss_compare_largest <- ggplot(bin_results, aes(x = bin_center, y = percenta
 
 #distribution plot - sizes of ranges
 range_size <- ggplot(exceedsp585[exceedsp585$year==2100,],aes(x=total_area/exceedall585$total_area[1]*100))+
-  geom_histogram(fill = "lightgray", color = "black")+
+  geom_histogram(fill = "lightgray", color = "black",binwidth=3,boundary=0)+
   theme_classic()+
   labs(x = "Range as proportion \nof domain area (%)", 
        y = "Number of species")+
-  scale_x_continuous(limits = c(-3, 100), 
-                     breaks = seq(0, 100, 20),expand=c(0,0))+
-  scale_y_continuous(limits=c(0,150),expand=c(0,0))
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_continuous(breaks = seq(0, 200, 50)) +
+  coord_cartesian(xlim = c(0, 100), ylim = c(0, 200), expand = FALSE)
 
 
 
@@ -902,6 +902,9 @@ temp_analog <- ggplot(species_avg_all, aes(x = total_area/exceedall585$total_are
   annotate("text", x = 60, y = 900, label = "SSP245", color = "black", fontface = "bold") +
   annotate("text", x = 60, y = 1300, label = "SSP370", color = "black", fontface = "bold") +
   annotate("text", x = 60, y = 1700, label = "SSP585", color = "black", fontface = "bold")
+
+
+
 
 
 
